@@ -1,0 +1,80 @@
+# Runtime / local data (SQLite, dumps, zvec, settings)
+/data/*
+!/data/.gitkeep
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Scratch / one-off scripts at repo root only (do NOT use _*.py — it matches __init__.py)
+/_*.py
+/smoke_*.py
+/rebuild.bat
+/rebuild.cmd
+/rebuild.ps1
+
+# Local unit tests (not published)
+/tests/
+
+# Local probes, smoke leftovers, Playwright cache
+_tmp*/
+.tmp*/
+.tmp_*
+scratch/
+scripts/
+.playwright-browsers/
+
+# Internal review journal and spec (local paths, not for a public clone)
+discussion/
+discussion.md
+TZ.md
+compare.md
+docs/
+
+# Infostart publication drafts (local)
+/infostart/
+
+# IDE / OS
+.cursor/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+.tmp/
+tmp/
+
+# Local 1C dump samples & extraction artifacts (not source)
+*.bin
+FormModule*.bsl
+FormModule_extracted.bsl
+extract_form_module.py
+Модуль-формы-из-Form.bin.md
+Отчет*.txt
+Отчёт*.txt
+
+# Accidental local copies
+/index.html
+*.zip

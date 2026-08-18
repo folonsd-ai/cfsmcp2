@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "1c-code-metadata-mcp": {
+      "type": "remote",
+      "url": "http://localhost:8000/mcp"
+    },
+    "1C-docs-mcp": {
+      "type": "remote",
+      "url": "http://localhost:8003/mcp"
+    },
+    "1c-graph-metadata-mcp": {
+      "type": "remote",
+      "url": "http://localhost:8006/mcp"
+    },
+    "cfsmcp2": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8559/mcp/"
+    }
+  }
+}
