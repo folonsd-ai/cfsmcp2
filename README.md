@@ -145,3 +145,9 @@ Copyright (C) 2026 folonsd-ai.
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
 If you modify cfsmcp2 and let others use it over a network (UI or MCP), AGPL requires that they can get the corresponding source. The canonical source is https://github.com/folonsd-ai/cfsmcp2 .
+
+---
+
+> ![Infostart](media/infostart.svg)
+>
+> Статья на Инфостарте: [Лёгкое управление несколькими контекстами CF и CFE на одном MCP-сервере](https://infostart.ru/1c/articles/2767150/)
