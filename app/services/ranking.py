@@ -96,6 +96,14 @@ MAX_NAMED_ENTITY_SPECS = 6
 # U41: hard cap on mid-string / stem LIKE scans per query (prefix lane first).
 MAX_STEM_LIKE_SCANS = 3
 STEM_RECALL_BUDGET_MS = 250.0
+# Outer wall-clock ceiling for the whole ``sql_recall`` span (search_metadata /
+# semantic_search). Nested above class-C ``STEM_RECALL_BUDGET_MS`` — not a
+# replacement: stem packs still stop on their own 250ms cap; this stops
+# token/help/report/stem together from running tens of seconds. Keep
+# SQL_RECALL_SPAN_BUDGET_MS > STEM_RECALL_BUDGET_MS so C can finish and
+# indexed/help lanes still get a slice. Flags stay separate:
+# ``stem_recall_budget_hit`` (C) vs ``sql_recall_budget_hit`` (span).
+SQL_RECALL_SPAN_BUDGET_MS = 500.0
 # Prefer cheaper trees before Документы.* in stem LIKE order.
 _STEM_PREFIX_COST: dict[str, int] = {
     "Константы.": 0,
@@ -1259,6 +1267,8 @@ def lexical_name_prefixes(query: str) -> list[str]:
     Not a FAQ map — derived from quotes and distinctive NL tokens only.
     Prefer short topic stems (bare quotes / distinctive) before long typed
     CamelCase names so «пересортице» is not crowded out of the cap.
+    Verbish NL (рассчитывает / скользящую) is dropped — those stems made
+    ``search_by_name_prefixes`` multi-second on large Docker volumes.
     """
     q = query or ""
     if not (
@@ -1272,7 +1282,7 @@ def lexical_name_prefixes(query: str) -> list[str]:
 
     def add(name: str) -> None:
         n = (name or "").strip()
-        if len(n) < 5:
+        if len(n) < 5 or not _is_lexical_sql_stem(n):
             return
         key = n.casefold()
         if key in seen:
@@ -1291,6 +1301,11 @@ def lexical_name_prefixes(query: str) -> list[str]:
         if len(n) > 10:
             add(n[: max(8, len(n) - 2)])
     return out[:8]
+
+
+def lexical_name_prefixes_for_sql(query: str, *, max_n: int = 2) -> list[str]:
+    """Stricter cap for SQLite name-prefix lane (Docker ERP tax per stem)."""
+    return lexical_name_prefixes(query)[: max(1, min(int(max_n), 4))]
 
 
 def expand_fts_query(query: str) -> str:
@@ -1552,6 +1567,17 @@ _PROCESS_NL_STEMS = (
     "фактическ",
     "учетн",
     "расчет",
+    "рассчит",  # рассчитывает — not a metadata name prefix
+    "скольз",  # скользящую потребность → noise stem Скользящ
+    "напиш",
+    "состав",
+    "опиш",
+    "выяв",
+    "избеж",
+    "контрол",
+    "смоделир",
+    "детализац",
+    "приоритет",
     "объём",
     "объем",
     "описан",
@@ -1561,6 +1587,17 @@ _PROCESS_NL_STEMS = (
     "сгруппир",
     "объедин",
     "соединен",
+    "который",
+    "которая",
+    "которое",
+    "которые",
+    "вперед",
+    "вперёд",
+)
+# Verb / participle tails after casefold (howto NL → false metadata stems).
+_VERBISH_NL_TAIL_RE = re.compile(
+    r"(?:ает|яет|ует|иет|ают|яют|ал[аи]?|ял[аи]?|ил[аи]?|"
+    r"ать|ять|ить|еть|ающ|яющ|ующ|ющ|ящ\w*|ащ\w*)$"
 )
 _KIND_PRIOR_JOB_RE = re.compile(
     r"регламентн\w*\s+задан|задан\w*\s+регламент",
@@ -1642,12 +1679,35 @@ def _is_weak_content_token(token: str) -> bool:
 
 def _is_process_nl_token(token: str) -> bool:
     t = (token or "").casefold().replace("ё", "е")
-    return any(t.startswith(stem) for stem in _PROCESS_NL_STEMS)
+    if any(t.startswith(stem) for stem in _PROCESS_NL_STEMS):
+        return True
+    # Conjugated verbs / participles → never path-prefix metadata stems.
+    return bool(_VERBISH_NL_TAIL_RE.search(t))
+
+
+def _is_lexical_sql_stem(stem: str) -> bool:
+    """Keep only stems that can plausibly be ERP CamelCase name prefixes."""
+    s = (stem or "").strip()
+    if len(s) < 5:
+        return False
+    # Reject verbish after nl_token_to_metadata_stem (Рассчитывает, Скользящ…).
+    if _is_process_nl_token(s) or _is_process_nl_token(s.casefold()):
+        return False
+    cf = s.casefold().replace("ё", "е")
+    if _VERBISH_NL_TAIL_RE.search(cf):
+        return False
+    return True
 
 
 def _quoted_span_blob(query: str) -> str:
     """Lowercase blob of all «…» / \"…\" spans for quote-priority ranking."""
     parts = [m.group(1) for m in _NAMED_ENTITY_QUOTED_RE.finditer(query or "")]
+    return " ".join(parts).casefold().replace("ё", "е")
+
+
+def _paren_span_blob(query: str) -> str:
+    """Lowercase blob of (…) enumerations — often short register nouns."""
+    parts = re.findall(r"\(([^)]{2,80})\)", query or "")
     return " ".join(parts).casefold().replace("ё", "е")
 
 
@@ -1713,47 +1773,72 @@ def distinctive_nl_stem_specs(query: str) -> list[tuple[str, str]]:
 
     Prefer tokens that appear inside quotes; skip process/how-to verbs so
     «пересортице» is not crowded out by сопоставления/фактическими.
+
+    Token length floor is 5 (same as ``_is_lexical_sql_stem``) so short
+    reference nouns («курсы», «цены» stems) are not dropped before scoping.
+    Trees: Документы always; РегистрыНакопления for long stems (≥8);
+    РегистрыСведений for shorter distinctive stems (5–7) — info/status
+    registers without opening a third tree on every long stem.
     """
     q = query or ""
     q_blob = _quoted_span_blob(q)
+    p_blob = _paren_span_blob(q)
     tokens = [
         t
         for t in query_content_tokens(q)
-        if len(t) >= 6
+        if len(t) >= 5
         and not _is_weak_content_token(t)
         and not _is_process_nl_token(t)
     ]
 
-    def _tok_key(t: str) -> tuple[int, int]:
-        in_quote = 1 if t in q_blob or any(
-            t[: max(4, len(t) - 2)] in q_blob for _ in (0,)
-        ) else 0
-        # Also: token is a stem of a quoted word.
-        if not in_quote and q_blob:
-            for qw in _TOKEN_RE.findall(q_blob):
-                if qw.startswith(t[:5]) or t.startswith(qw[:5]):
-                    in_quote = 1
-                    break
-        return (in_quote, len(t))
+    def _in_blob(t: str, blob: str) -> int:
+        if not blob:
+            return 0
+        if t in blob or any(t[: max(4, len(t) - 2)] in blob for _ in (0,)):
+            return 1
+        for qw in _TOKEN_RE.findall(blob):
+            if qw.startswith(t[:5]) or t.startswith(qw[:5]):
+                return 1
+        return 0
+
+    def _tok_key(t: str) -> tuple[int, int, int]:
+        # Quotes > parenthetical lists > length (topic nouns often in lists).
+        return (_in_blob(t, q_blob), _in_blob(t, p_blob), len(t))
 
     tokens.sort(key=_tok_key, reverse=True)
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for tok in tokens[:6]:
+    # Quotas: long stems fill Accum without starving short Info nouns
+    # («курсы»/«статусы») that lose a pure longest-first race to adjectives.
+    long_n = 0
+    short_n = 0
+    max_long = 2
+    max_short = 2
+    for tok in tokens:
+        if long_n >= max_long and short_n >= max_short:
+            break
         stem = nl_token_to_metadata_stem(tok)
-        if not stem:
+        if not stem or not _is_lexical_sql_stem(stem):
             continue
         key = stem.casefold()
         if key in seen:
             continue
-        seen.add(key)
-        out.append(("Документы.", stem))
-        # Second tree only for long distinctive tokens (cost control).
         if len(stem) >= 8:
+            if long_n >= max_long:
+                continue
+            seen.add(key)
+            out.append(("Документы.", stem))
             out.append(("РегистрыНакопления.", stem))
-        if len(out) >= 5:
-            break
-    return out[:5]
+            long_n += 1
+        else:
+            # Band 5–7: short reference/status nouns → InfoRegister only.
+            if short_n >= max_short:
+                continue
+            seen.add(key)
+            out.append(("Документы.", stem))
+            out.append(("РегистрыСведений.", stem))
+            short_n += 1
+    return out
 
 
 def multi_token_coverage_boost(query: str, hit: dict[str, Any]) -> float:

@@ -840,6 +840,7 @@ _UI_POLL_API_PATHS = frozenset(
         "/api/settings/models",
         "/api/system/runtime",
         "/api/system/browse",
+        "/api/system/mcp-busy",
     }
 )
 

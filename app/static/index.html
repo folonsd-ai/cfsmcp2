@@ -211,6 +211,18 @@
       border:1px solid var(--border); border-radius:4px;
       color:var(--muted); background:var(--track);
       user-select:none;
+      cursor:pointer;
+    }
+    .type-badge:hover {
+      color:var(--accent); border-color:var(--accent);
+      background:color-mix(in srgb, var(--accent) 12%, var(--track));
+    }
+    .type-badge:focus-visible {
+      outline:2px solid var(--accent); outline-offset:2px;
+    }
+    .type-badge.is-copied {
+      color:var(--ok); border-color:var(--ok);
+      background:var(--ok-soft);
     }
 
     .source-badge {
@@ -1165,6 +1177,27 @@
     .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
     .stat-card .val { font-size:18px; font-weight:700; line-height:1.1; }
     .stat-card .lbl { color:var(--muted); font-size:10px; margin-top:2px; }
+    .stat-card.warn-card .val { color:var(--warn, #f5a524); }
+    .stat-card.busy-card .val { color:var(--accent, #22C55E); }
+    .mcp-busy-panel {
+      background:var(--surface); border:1px solid var(--border); border-radius:8px;
+      padding:8px 10px; margin-bottom:8px; flex:0 0 auto;
+    }
+    .mcp-busy-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 12px; margin-bottom:6px; }
+    .mcp-busy-title { font-size:11px; font-weight:600; color:var(--muted); }
+    .mcp-busy-status { font-size:15px; font-weight:700; line-height:1.2; }
+    .mcp-busy-status.is-busy { color:var(--accent, #22C55E); }
+    .mcp-busy-status.is-index { color:var(--warn, #f5a524); }
+    .mcp-busy-lines { font-size:12px; line-height:1.45; margin:0 0 6px; }
+    .mcp-busy-lines li { margin:0; word-break:break-word; }
+    .mcp-busy-banner {
+      font-size:12px; padding:6px 8px; border-radius:6px; margin-bottom:6px;
+      background:rgba(245,165,36,.12); border:1px solid rgba(245,165,36,.35); color:var(--text);
+    }
+    .mcp-busy-banner[hidden] { display:none !important; }
+    .mcp-busy-recent { margin-top:6px; }
+    .mcp-busy-recent h3 { margin:0 0 4px; font-size:11px; color:var(--muted); font-weight:600; }
+    .mcp-busy-recent .recent-table { font-size:11px; }
     .charts { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:0; flex:0 0 auto; }
     @media (max-width:800px) { .charts { grid-template-columns:1fr; } }
     .chart-box { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px; }
@@ -1574,6 +1607,32 @@
 
     <div id="viewStats" class="board-view" hidden>
       <p id="statsMeta" class="muted stats-view-meta"></p>
+      <section id="mcpBusyPanel" class="mcp-busy-panel" aria-live="polite">
+        <div class="mcp-busy-head">
+          <span class="mcp-busy-title" data-i18n="stats.mcpBusy.title">MCP сейчас</span>
+          <span id="mcpBusyStatus" class="mcp-busy-status" data-i18n="stats.mcpBusy.idle">Свободен</span>
+        </div>
+        <div id="mcpBusyBanner" class="mcp-busy-banner" hidden></div>
+        <ul id="mcpBusyLines" class="mcp-busy-lines muted"></ul>
+        <div class="stats-grid" id="mcpBusyCards"></div>
+        <div class="mcp-busy-recent">
+          <h3 data-i18n="stats.mcpBusy.recentTitle">Последние MCP</h3>
+          <div class="recent-table-wrap">
+            <table class="recent-table">
+              <thead>
+                <tr>
+                  <th data-i18n="stats.th.time">Дата, время</th>
+                  <th data-i18n="stats.th.name">Имя</th>
+                  <th data-i18n="stats.th.ms">мс</th>
+                  <th data-i18n="stats.mcpBusy.thWait">ожид.</th>
+                  <th data-i18n="stats.th.context">Контекст</th>
+                </tr>
+              </thead>
+              <tbody id="mcpBusyRecent"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
       <div class="stats-grid" id="statsSummary"></div>
       <div class="charts">
         <div class="chart-box">
@@ -3768,6 +3827,7 @@
       app_log_retain_days: 14, app_log_max_rows: 5000,
     };
     let statsTimer = null;
+    let mcpBusyTimer = null;
     let entitiesPollTimer = null;
     let boardView = 'table';
     let boardSearchQuery = '';
@@ -4307,6 +4367,7 @@
       document.getElementById('toolbarEvents').hidden = boardView !== 'events';
       document.getElementById('toolbarErrors').hidden = boardView !== 'errors';
       if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      if (mcpBusyTimer) { clearInterval(mcpBusyTimer); mcpBusyTimer = null; }
       if (boardView === 'stats' || boardView === 'events') {
         loadStats();
         statsTimer = setInterval(() => loadStats(), 3000);
@@ -4318,6 +4379,11 @@
       if (boardView === 'stats') {
         // charts need visible canvas
         setTimeout(() => { try { loadStats(); } catch (_) {} }, 0);
+        // MCP busy: same open/close lifecycle as statsTimer; faster poll for running_for_ms.
+        try { loadMcpBusy(); } catch (_) {}
+        mcpBusyTimer = setInterval(() => {
+          try { loadMcpBusy(); } catch (_) {}
+        }, 1500);
       }
     }
 
@@ -4693,6 +4759,114 @@
           plugins: { legend: { display: false } },
         },
       });
+    }
+
+    async function loadMcpBusy() {
+      if (boardView !== 'stats') return;
+      let data;
+      try {
+        const res = await fetch('/api/system/mcp-busy?recent_window_sec=60');
+        if (!res.ok) return;
+        data = await res.json();
+      } catch (_) {
+        return;
+      }
+      renderMcpBusy(data || {});
+    }
+
+    function renderMcpBusy(data) {
+      const nFlight = Number(data.mcp_in_flight_count || 0);
+      const indexing = !!data.embed_reindex_busy;
+      const inflight = Array.isArray(data.in_flight) ? data.in_flight : [];
+      const busyEntities = Array.isArray(data.busy_entities) ? data.busy_entities : [];
+      const recent = Array.isArray(data.recent_completed) ? data.recent_completed : [];
+
+      const statusEl = document.getElementById('mcpBusyStatus');
+      if (statusEl) {
+        statusEl.classList.remove('is-busy', 'is-index');
+        if (indexing) {
+          statusEl.textContent = t('stats.mcpBusy.indexing');
+          statusEl.classList.add('is-index');
+        } else if (nFlight > 0) {
+          statusEl.textContent = t('stats.mcpBusy.busy', { n: nFlight });
+          statusEl.classList.add('is-busy');
+        } else {
+          statusEl.textContent = t('stats.mcpBusy.idle');
+        }
+      }
+
+      const banner = document.getElementById('mcpBusyBanner');
+      if (banner) {
+        if (indexing && busyEntities.length) {
+          const names = busyEntities
+            .map((e) => {
+              const name = String(e.name || e.id || '');
+              const st = String(e.status || '');
+              return st ? `${name} (${st})` : name;
+            })
+            .filter(Boolean)
+            .join(', ');
+          banner.textContent = t('stats.mcpBusy.bannerIndex', { names: names || '—' });
+          banner.hidden = false;
+        } else {
+          banner.textContent = '';
+          banner.hidden = true;
+        }
+      }
+
+      const linesEl = document.getElementById('mcpBusyLines');
+      if (linesEl) {
+        const top = inflight.slice(0, 3);
+        if (!top.length) {
+          linesEl.innerHTML = '';
+        } else {
+          linesEl.innerHTML = top.map((row) => {
+            const tool = escapeHtml(String(row.tool || ''));
+            const ctx = escapeHtml(String(row.context || ''));
+            const ms = Math.round(Number(row.running_for_ms) || 0);
+            const msLbl = escapeHtml(t('stats.mcpBusy.lineMs', { ms }));
+            const parts = [tool, ctx, msLbl].filter(Boolean);
+            return `<li>${parts.join(' · ')}</li>`;
+          }).join('');
+        }
+      }
+
+      const cardsEl = document.getElementById('mcpBusyCards');
+      if (cardsEl) {
+        const sumMs = Math.round(Number(data.recent_completed_ms_sum) || 0);
+        const shortN = Number(data.recent_short_count) || 0;
+        const cardCls = (extra) => `stat-card${extra ? ` ${extra}` : ''}`;
+        cardsEl.innerHTML = [
+          [nFlight, t('stats.mcpBusy.cardInflight'), nFlight > 0 ? 'busy-card' : ''],
+          [sumMs, t('stats.mcpBusy.cardSumMs'), ''],
+          [shortN, t('stats.mcpBusy.cardShort'), ''],
+        ].map(([val, lbl, cls]) => (
+          `<div class="${cardCls(cls)}"><div class="val">${escapeHtml(String(val))}</div><div class="lbl">${escapeHtml(lbl)}</div></div>`
+        )).join('');
+      }
+
+      const tbody = document.getElementById('mcpBusyRecent');
+      if (tbody) {
+        const rows = recent.slice(0, 15);
+        if (!rows.length) {
+          tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(t('stats.mcpBusy.noneRecent'))}</td></tr>`;
+        } else {
+          tbody.innerHTML = rows.map((e) => {
+            const ms = Math.round(Number(e.duration_ms) || 0);
+            const sw = Number(e.sqlite_wait_ms) || 0;
+            const zw = Number(e.zvec_wait_ms) || 0;
+            const wait = Math.round(sw + zw);
+            const waitCell = wait > 0 ? String(wait) : '';
+            return `<tr>
+              <td>${escapeHtml(fmtLogTs(e.ended_at))}</td>
+              <td>${escapeHtml(String(e.tool || ''))}</td>
+              <td>${ms || ''}</td>
+              <td>${escapeHtml(waitCell)}</td>
+              <td>${escapeHtml(String(e.context || ''))}</td>
+            </tr>`;
+          }).join('');
+        }
+      }
     }
 
     async function loadStats() {
@@ -5094,6 +5268,47 @@
       return escapeHtml(s).replace(/'/g, '&#39;');
     }
 
+    async function copyTextToClipboard(text) {
+      const value = String(text ?? '');
+      if (!value) return false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+      } catch (_) { /* fall through */ }
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+
+    function flashCopiedName(el) {
+      if (!el) return;
+      const prev = el.getAttribute('title') || '';
+      el.classList.add('is-copied');
+      el.setAttribute('title', t('row.nameCopied'));
+      clearTimeout(el._copiedTimer);
+      el._copiedTimer = setTimeout(() => {
+        el.classList.remove('is-copied');
+        el.setAttribute('title', prev || t('row.copyName'));
+      }, 1200);
+    }
+
+    async function copyEntityNameFromEl(el) {
+      if (!el) return;
+      const name = el.getAttribute('data-copy-name') || el.textContent || '';
+      if (!(await copyTextToClipboard(name))) return;
+      flashCopiedName(el);
+    }
+
     function autoSizeComment(el) {
       if (!el) return;
       el.style.height = 'auto';
@@ -5420,9 +5635,7 @@
       const runIcon = e.enabled ? ICONS.play : ICONS.pause;
       const runTitle = e.enabled ? t('row.runOn') : t('row.runOff');
       const isExt = (e.entity_type || '') === 'extension';
-      const typeKey = isExt ? 'extension' : 'configuration';
       const typeBadge = isExt ? 'CFE' : 'CF';
-      const typeTitle = t('type.' + typeKey);
       const tagIds = e.tag_ids || [];
       const tagsInner = tagIds.length
         ? tagIds.map((tid) => chipHtml(tagsById[tid] || { id: tid, name: '#' + tid, color: '#64748b' }, { small: true, removable: true })).join('')
@@ -5449,7 +5662,11 @@
         name: `<td class="name-cell">
             <div class="ctx-name">
               <span class="head name-head">
-                <span class="type-badge ${isExt ? 'cfe ext' : 'cf'}" title="${escapeAttr(typeTitle)}">${typeBadge}</span>
+                <span class="type-badge ${isExt ? 'cfe ext' : 'cf'}"
+                  role="button" tabindex="0"
+                  data-copy-name="${escapeAttr(e.name)}"
+                  title="${escapeAttr(t('row.copyName'))}"
+                  aria-label="${escapeAttr(t('row.copyName') + ': ' + e.name)}">${typeBadge}</span>
                 <span class="n">${escapeHtml(e.name)}</span>
               </span>
               <textarea class="comment-input c" rows="1" data-entity-id="${e.id}"
@@ -5671,6 +5888,13 @@
     tagPicker.addEventListener('click', (ev) => { ev.stopPropagation(); });
 
     entityBoard.addEventListener('click', (ev) => {
+      const nameEl = ev.target.closest('.type-badge[data-copy-name]');
+      if (nameEl && entityBoard.contains(nameEl)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        copyEntityNameFromEl(nameEl);
+        return;
+      }
       const removeBtn = ev.target.closest('[data-remove-tag]');
       if (removeBtn && entityBoard.contains(removeBtn)) {
         ev.preventDefault();
@@ -5694,6 +5918,13 @@
         return;
       }
       openTagPicker(id, ev.clientX, ev.clientY);
+    });
+    entityBoard.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const nameEl = ev.target.closest('.type-badge[data-copy-name]');
+      if (!nameEl || !entityBoard.contains(nameEl)) return;
+      ev.preventDefault();
+      copyEntityNameFromEl(nameEl);
     });
 
     function entityMatchesTagFilter(e) {

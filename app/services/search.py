@@ -303,12 +303,20 @@ def _domain_counter_exact_hits(
     return rows
 
 
-def _lexical_prefix_sql_hits(conn, entity: dict, query: str, *, limit: int) -> list[dict]:
+def _lexical_prefix_sql_hits(
+    conn,
+    entity: dict,
+    query: str,
+    *,
+    limit: int,
+    budget: _SqlRecallBudget | None = None,
+) -> list[dict]:
     """U41: cheap name-prefix lane before stem mid-LIKE trees.
 
-    At most 4 stems × 2 collections — avoid ERP name-index full scans.
+    At most 2 stems × 2 collections — each stem can cost multi-seconds on
+    large Docker volumes; honor span budget between probes.
     """
-    prefixes = ranking_svc.lexical_name_prefixes(query)[:4]
+    prefixes = ranking_svc.lexical_name_prefixes_for_sql(query, max_n=2)
     if not prefixes:
         return []
     eid = int(entity["id"])
@@ -316,22 +324,27 @@ def _lexical_prefix_sql_hits(conn, entity: dict, query: str, *, limit: int) -> l
     rows: list[dict] = []
     seen: set[str] = set()
     for coll in ("Документы", "РегистрыНакопления"):
-        extra = obj_repo.search_by_name_prefixes(
-            conn,
-            eid,
-            prefixes,
-            path_prefix=coll,
-            include_borrowed=True,
-            limit=per,
-        )
-        for sh in extra:
-            p = str(sh.get("path") or "")
-            if not p or p in seen:
-                continue
-            seen.add(p)
-            rows.append(_sql_hit_dict(entity, sh, lexical_recall=True))
-            if len(rows) >= 8:
-                return rows
+        if budget is not None and budget.exhausted():
+            break
+        for stem in prefixes:
+            if budget is not None and budget.exhausted():
+                break
+            extra = obj_repo.search_by_name_prefixes(
+                conn,
+                eid,
+                [stem],
+                path_prefix=coll,
+                include_borrowed=True,
+                limit=per,
+            )
+            for sh in extra:
+                p = str(sh.get("path") or "")
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                rows.append(_sql_hit_dict(entity, sh, lexical_recall=True))
+                if len(rows) >= 8:
+                    return rows
     return rows
 
 
@@ -469,6 +482,79 @@ def _object_row_as_sql_hit(entity: dict, obj: dict) -> dict:
     )
 
 
+class _SqlRecallBudget:
+    """Wall-clock ceiling for one ``sql_recall`` span.
+
+    Nested above class-C ``STEM_RECALL_BUDGET_MS``: stem packs keep their own
+    inner cap; this object is the outer stop for token/help/report/stem in the
+    same span. Do not merge the two hit flags — diagnostics must show which
+    budget fired (``stem_recall_budget_hit`` vs ``sql_recall_budget_hit``).
+    """
+
+    __slots__ = (
+        "deadline",
+        "sql_recall_budget_hit",
+        "stem_recall_budget_hit",
+        "unscoped_mid_like_skipped",
+    )
+
+    def __init__(self, budget_ms: float | None = None) -> None:
+        ms = float(
+            ranking_svc.SQL_RECALL_SPAN_BUDGET_MS
+            if budget_ms is None
+            else budget_ms
+        )
+        self.deadline = time.perf_counter() + max(0.0, ms) / 1000.0
+        self.sql_recall_budget_hit = False
+        self.stem_recall_budget_hit = False
+        self.unscoped_mid_like_skipped = False
+
+    def remaining_ms(self) -> float:
+        return max(0.0, (self.deadline - time.perf_counter()) * 1000.0)
+
+    def exhausted(self) -> bool:
+        if time.perf_counter() >= self.deadline:
+            self.sql_recall_budget_hit = True
+            return True
+        return False
+
+    def attach_flags(self, payload: dict) -> None:
+        if self.sql_recall_budget_hit:
+            payload["sql_recall_budget_hit"] = True
+        if self.stem_recall_budget_hit:
+            payload["stem_recall_budget_hit"] = True
+        if self.unscoped_mid_like_skipped:
+            payload["sql_recall_skipped"] = "unscoped_mid_like_forbidden"
+
+
+def _is_report_path_prefix(path_prefix: str | None) -> bool:
+    """True when scope is the report collection tree (mode A only — no mid-LIKE)."""
+    p = (path_prefix or "").strip().rstrip(".")
+    if not p:
+        return False
+    head = p.split(".", 1)[0]
+    return head in {"Отчеты", "Reports"}
+
+
+def _pool_strong_for_token_sql(query: str, hits: list[dict]) -> bool:
+    """Skip token mid-LIKE when hybrid/FTS already has a usable root pool."""
+    if not hits:
+        return False
+    if _root_content_hits(query, hits) >= ranking_svc.MIN_STEM_ROOT_HITS:
+        return True
+    report_roots = 0
+    any_roots = 0
+    for h in hits:
+        if not ranking_svc.is_root_object(h):
+            continue
+        any_roots += 1
+        if str(h.get("kind") or "") == "Report":
+            report_roots += 1
+    if report_roots >= 1:
+        return True
+    return any_roots >= ranking_svc.MIN_STEM_ROOT_HITS
+
+
 def _sql_identifier_hits(
     conn,
     entity: dict,
@@ -527,6 +613,8 @@ def _sql_token_hits(
     path_prefix: str | None = None,
     fts_hit_count: int = 0,
     needs_report_roots: bool = False,
+    pool_strong: bool = False,
+    budget: _SqlRecallBudget | None = None,
 ) -> list[dict]:
     # Keep original CamelCase — SQLite LIKE is case-sensitive for Cyrillic, so
     # casefolded ``вводостатков`` misses ``ВводОстатковСПодотчетниками``.
@@ -536,24 +624,24 @@ def _sql_token_hits(
     doc_aliases = ranking_svc.document_alias_terms_for_query(query)
     if not long_tokens and not aliases and not doc_aliases:
         return []
+    if budget is not None and budget.exhausted():
+        return []
     rows: list = []
-    # Skip the plain-token SQL scan when FTS already returned enough hits —
-    # a full-table LIKE over a large context (e.g. УправлениеПредприятием
-    # ~540k objects) costs tens of seconds.
-    # Unscoped (no path_prefix/kind): even one mid-string LIKE is a full table
-    # scan. If hybrid already returned *any* hits, skip — howto/report recall
-    # still runs via Help./Отчеты. scopes in callers.
+    # Policy (discussion/2026-08-20-sql-recall-policy-proposal.md §3/§9):
+    #   A indexed — always OK
+    #   B scoped mid-LIKE — path_prefix/kind, not report tree, pool weak
+    #   C stem packs — separate budget (caller)
+    #   D unscoped mid-LIKE — forbidden (never search_by_tokens without scope)
     scoped = bool((path_prefix or "").strip() or kind)
     help_kind = kind == HELP_KIND or str(path_prefix or "").startswith("Help")
+    report_tree = _is_report_path_prefix(path_prefix)
     ident = (not scoped) and _looks_like_method_identifier(query)
+    # Prefer caller pool_strong; fall back to empty-FTS heuristic only when
+    # caller did not pass hits (legacy: fts_hit_count alone is not "pool strength").
+    strong = bool(pool_strong)
     ident_hits: list = []
-    if ident and fts_hit_count < int(limit):
-        # Indexed name= / path=. Unscoped %identifier% on ERP was ~45s
-        # with 0 hits (2026-08-18). Do not return early: a single token can
-        # still be an alias key («дебиторка» → ДебиторскаяЗадолженность).
-        # Document-alias regex is phrase-only, so «приобретение» alone does
-        # not recall ПриобретениеТоваровУслуг here — FTS covers that; we
-        # still skip unscoped token LIKE.
+    if ident and not strong:
+        # Indexed name= / path=. Unscoped %identifier% is class D — never.
         ident_hits = _sql_identifier_hits(
             conn,
             entity,
@@ -561,20 +649,26 @@ def _sql_token_hits(
             include_borrowed=include_borrowed,
             limit=limit,
         )
-    if (
-        long_tokens
-        and fts_hit_count < int(limit)
-        and (scoped or fts_hit_count == 0)
+    # Class D: unscoped mid-LIKE is banned even when FTS is empty.
+    if long_tokens and not scoped and not ident:
+        if budget is not None:
+            budget.unscoped_mid_like_skipped = True
+    allow_mid_like = (
+        bool(long_tokens)
+        and scoped
+        and not report_tree  # report tree: mode A only (name-prefix / exact)
+        and not strong
         and not ident
-    ):
+        and (budget is None or not budget.exhausted())
+    )
+    if allow_mid_like:
         # NL queries have many verbs/stopwords; AND of all of them kills recall.
         # Keep the two longest stems (e.g. подотчетным + остатки).
         use_tokens = long_tokens
         if len(use_tokens) > 2:
             use_tokens = sorted(use_tokens, key=lambda t: (-len(t), t.casefold()))[:2]
-        # Unscoped AND of two leading-wildcard LIKEs cannot use indexes (~30s on ERP).
-        # Help: one noun is enough; verbs double a ~0.6s Help-tree scan.
-        if (not scoped or help_kind) and len(use_tokens) > 1:
+        # Help: one noun is enough; verbs double a Help-tree scan.
+        if help_kind and len(use_tokens) > 1:
             use_tokens = [
                 sorted(use_tokens, key=lambda t: (-len(t), t.casefold()))[0]
             ]
@@ -591,11 +685,13 @@ def _sql_token_hits(
     # U14: each alias term separately (OR recall) — AND of report names would miss.
     # Exact name under Отчеты.* (no comment LIKE — mid-string under the report tree
     # was multi-second on ERP when aliases fired).
-    if aliases:
+    if aliases and (budget is None or not budget.exhausted()):
         alias_prefix = (path_prefix or "").strip().rstrip(".") or ranking_svc.REPORT_PATH_PREFIX_RU
         seen_paths = {r["path"] for r in rows if r["path"]}
         per_alias_limit = max(5, min(int(limit), 20))
         for term in aliases:
+            if budget is not None and budget.exhausted():
+                break
             if any(term.casefold() in str(p).casefold() for p in seen_paths):
                 continue
             extra = obj_repo.search_by_exact_names(
@@ -613,7 +709,7 @@ def _sql_token_hits(
                     rows.append(r)
     # P0: document aliases (purchase-from-supplier → ПриобретениеТоваровУслуг)
     # Exact Документы.<Name> / name= — must not comment-LIKE the Documents tree.
-    if doc_aliases:
+    if doc_aliases and (budget is None or not budget.exhausted()):
         explicit = (path_prefix or "").strip()
         skip_docs = bool(
             explicit
@@ -629,6 +725,8 @@ def _sql_token_hits(
             seen_paths = {r["path"] for r in rows if r["path"]}
             per_alias_limit = max(5, min(int(limit), 20))
             for term in doc_aliases:
+                if budget is not None and budget.exhausted():
+                    break
                 if any(term.casefold() in str(p).casefold() for p in seen_paths):
                     continue
                 extra = obj_repo.search_by_exact_names(
@@ -644,11 +742,9 @@ def _sql_token_hits(
                     if p and p not in seen_paths:
                         seen_paths.add(p)
                         rows.append(r)
-    # U15: report-data NL without alias terms («отчет по продажам…») often leaves
-    # the pool without any Отчеты.* children to promote. Recall the report tree by
-    # the first significant non-stopword tokens, each scanned separately (OR),
-    # scoped to the report tree (cheap on big contexts).
-    if needs_report_roots and not aliases:
+    # U15: report-data NL without alias terms — indexed name-prefix under Отчеты.*
+    # (mode A). Mid-LIKE under the report tree is out of the hot path (§9).
+    if needs_report_roots and not aliases and (budget is None or not budget.exhausted()):
         # First significant token is the report subject («по продажам» → продажи);
         # dimension tokens (номенклатуры/региону) would outmatch it in the exact
         # name match and push misleading reports to the top.
@@ -658,6 +754,8 @@ def _sql_token_hits(
             seen_paths = {r["path"] for r in rows if r["path"]}
             per_tok_limit = max(10, min(int(limit) * 4, 60))
             for tok in toks:
+                if budget is not None and budget.exhausted():
+                    break
                 # Name-prefix under Отчеты.* (not mid-LIKE/path BETWEEN tax).
                 stem = ranking_svc.nl_token_to_metadata_stem(tok) or tok
                 for r in obj_repo.search_by_name_prefixes(
@@ -697,6 +795,7 @@ def _intent_stem_sql_hits(
     *,
     limit: int,
     prior_root_hits: int = 0,
+    budget: _SqlRecallBudget | None = None,
 ) -> list[dict]:
     """Run capped stem-pack SQL once per (entity, query); reuse within TTL.
 
@@ -705,10 +804,17 @@ def _intent_stem_sql_hits(
 
     U41: cheaper prefixes first, hard scan/time budget, skip when lexical
     lane already filled the root quota.
+
+    Class-C ``STEM_RECALL_BUDGET_MS`` is an *inner* cap. When ``budget`` (span
+    ``SQL_RECALL_SPAN_BUDGET_MS``) is passed, it is an *outer* ceiling — not a
+    replacement for C. Hitting C sets ``stem_recall_budget_hit``; hitting the
+    span sets ``sql_recall_budget_hit`` (separate flags).
     """
     eid = int(entity["id"])
     key = (eid, (query or "").casefold().strip())
     if not key[1]:
+        return []
+    if budget is not None and budget.exhausted():
         return []
     now = time.time()
     with _stem_recall_lock:
@@ -750,8 +856,12 @@ def _intent_stem_sql_hits(
     for pref, stem in specs:
         if scans >= max_scans:
             break
+        if budget is not None and budget.exhausted():
+            break
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         if elapsed_ms >= ranking_svc.STEM_RECALL_BUDGET_MS:
+            if budget is not None:
+                budget.stem_recall_budget_hit = True
             break
         # Root-only path/name LIKE — avoids ~10s Document-tree scans.
         extra = obj_repo.search_by_stem_roots(
@@ -831,6 +941,7 @@ def _apply_howto_help_recall(
     path_prefix: str | None,
     limit: int,
     stem_recall: bool = True,
+    budget: _SqlRecallBudget | None = None,
 ) -> list[dict]:
     """U23/U25/U28–U38: Help+owners; settings/RLS/policy/query-join skip Help.
 
@@ -841,12 +952,15 @@ def _apply_howto_help_recall(
     do not double-pay within ``_STEM_RECALL_TTL_SEC``.
     Pass ``stem_recall=False`` from FTS (exact path); stems belong on semantic.
     """
+    if budget is not None and budget.exhausted():
+        return hits
     explicit = (path_prefix or "").strip()
     settings = ranking_svc.looks_like_settings_constraint_query(query)
     rls = ranking_svc.looks_like_rls_query(query)
     policy = ranking_svc.looks_like_accounting_policy_query(query)
     query_join = ranking_svc.looks_like_query_join_intent(query)
     pricing = ranking_svc.looks_like_pricing_intent(query)
+    pricing_fx = ranking_svc.looks_like_pricing_fx_intent(query)
     reconcile = ranking_svc.looks_like_report_reconcile_intent(query)
     budget_exec = ranking_svc.looks_like_budget_exec_intent(query)
     repair_overdue = ranking_svc.looks_like_repair_overdue_intent(query)
@@ -874,7 +988,11 @@ def _apply_howto_help_recall(
         if not stems:
             stems = ["Ограничен"]
         for pref in ("Константы.", "ФункциональныеОпции.", "Роли."):
+            if budget is not None and budget.exhausted():
+                break
             for stem in stems[:3]:
+                if budget is not None and budget.exhausted():
+                    break
                 extra = obj_repo.search_by_stem_roots(
                     conn,
                     int(entity["id"]),
@@ -893,16 +1011,33 @@ def _apply_howto_help_recall(
                     )
         return hits
 
+    # Pool strength from hybrid/FTS *before* lexical SQL — if roots already
+    # cover the query, skip the Docker-tax name-prefix lane (same early-stop
+    # idea as stem packs below).
+    pool_strong = (
+        _root_content_hits(query, hits) >= ranking_svc.MIN_STEM_ROOT_HITS
+        or _pool_strong_for_token_sql(query, hits)
+    )
+
     # U41: cheap name-prefix lexical lane before named/stem LIKE.
-    if stem_recall and not explicit:
-        lex_hits = _lexical_prefix_sql_hits(conn, entity, query, limit=limit)
+    if (
+        stem_recall
+        and not explicit
+        and not pool_strong
+        and (budget is None or not budget.exhausted())
+    ):
+        lex_hits = _lexical_prefix_sql_hits(
+            conn, entity, query, limit=limit, budget=budget
+        )
         if lex_hits:
             hits = _merge_sql_hits(hits, lex_hits)
-
-    pool_strong = _root_content_hits(query, hits) >= ranking_svc.MIN_STEM_ROOT_HITS
+            pool_strong = (
+                _root_content_hits(query, hits) >= ranking_svc.MIN_STEM_ROOT_HITS
+                or _pool_strong_for_token_sql(query, hits)
+            )
 
     # U36: always exact named-entity; stem LIKE only if pool still weak.
-    if stem_recall and not explicit:
+    if stem_recall and not explicit and (budget is None or not budget.exhausted()):
         named_hits = _named_entity_sql_hits(
             conn,
             entity,
@@ -931,7 +1066,12 @@ def _apply_howto_help_recall(
             "goods_return",
         }
     ) or ranking_svc.looks_like_budget_exec_intent(query) or schedule_intent
-    if stem_recall and not explicit and force_domain:
+    if (
+        stem_recall
+        and not explicit
+        and force_domain
+        and (budget is None or not budget.exhausted())
+    ):
         exact_hits = _domain_counter_exact_hits(
             conn, entity, query, limit=limit
         )
@@ -946,14 +1086,30 @@ def _apply_howto_help_recall(
             ):
                 pool_strong = True
 
-    # U28–U35/U41: stem packs — skipped when lexical/hybrid already filled roots.
-    if stem_recall and not explicit and not pool_strong:
+    # U28–U35/U41: stem packs — skipped when lexical/hybrid already filled roots,
+    # except chain packs (reconcile / pricing_fx / budget / repair): hybrid roots
+    # are often the wrong island, and _intent_stem_sql_hits already continues
+    # past MIN_STEM_ROOT_HITS until the pack anchor. Class C under outer span
+    # budget (see _SqlRecallBudget / STEM_RECALL_BUDGET_MS).
+    chain_pack = (
+        reconcile
+        or pricing_fx
+        or budget_exec
+        or repair_overdue
+    )
+    if (
+        stem_recall
+        and not explicit
+        and (not pool_strong or chain_pack)
+        and (budget is None or not budget.exhausted())
+    ):
         stem_hits = _intent_stem_sql_hits(
             conn,
             entity,
             query,
             limit=limit,
             prior_root_hits=_count_stem_roots(hits),
+            budget=budget,
         )
         if stem_hits:
             hits = _merge_sql_hits(hits, stem_hits)
@@ -978,6 +1134,8 @@ def _apply_howto_help_recall(
         return hits
     if explicit and not explicit.startswith("Help."):
         return ranking_svc.ensure_help_owners(hits)
+    if budget is not None and budget.exhausted():
+        return ranking_svc.ensure_help_owners(hits)
     help_prefix = explicit if explicit.startswith("Help.") else "Help."
     help_hits = _sql_token_hits(
         conn,
@@ -989,6 +1147,8 @@ def _apply_howto_help_recall(
         path_prefix=help_prefix,
         fts_hit_count=0,
         needs_report_roots=False,
+        pool_strong=False,
+        budget=budget,
     )
     if help_hits:
         hits = _merge_sql_hits(hits, help_hits)
@@ -1499,6 +1659,7 @@ def fts_search(
     fetch_n = max(fetch_n, limit * 4)
     topk = min(max(fetch_n, 1), settings.search_max_limit)
     per_groups: list[list[dict]] = []
+    recall_budgets: list[_SqlRecallBudget] = []
     objects_sum = sum(int(e.get("object_count") or 0) for e in entities)
     conn = connect(settings.db_path)
     try:
@@ -1522,42 +1683,57 @@ def fts_search(
             )
             if prefix:
                 hits = [h for h in hits if _path_under(str(h.get("path") or ""), prefix)]
+            # Outer SQL_RECALL_SPAN_BUDGET_MS ceiling over class-C
+            # STEM_RECALL_BUDGET_MS inside _intent_stem_sql_hits / howto — not
+            # a replacement for C; flags stay separate (sql_recall_budget_hit
+            # vs stem_recall_budget_hit).
+            recall_budget = _SqlRecallBudget()
             with timer.span("sql_recall"):
-                hits = _merge_sql_hits(
-                    hits,
-                    _sql_token_hits(
+                if not recall_budget.exhausted():
+                    hits = _merge_sql_hits(
+                        hits,
+                        _sql_token_hits(
+                            conn,
+                            entity,
+                            query,
+                            kind=search_kind,
+                            include_borrowed=include_borrowed,
+                            limit=limit + offset,
+                            path_prefix=prefix,
+                            fts_hit_count=len(hits),
+                            pool_strong=_pool_strong_for_token_sql(query, hits),
+                            budget=recall_budget,
+                            needs_report_roots=(
+                                (
+                                    prefer_report_roots
+                                    or ranking_svc.looks_like_report_query(query)
+                                )
+                                and not any(
+                                    str(h.get("kind") or "") == "Report"
+                                    and ranking_svc.is_root_object(h)
+                                    for h in hits
+                                )
+                                and not _report_recall_blocked(query, hits)
+                            ),
+                        ),
+                    )
+                if not recall_budget.exhausted():
+                    if prefer_report_roots or ranking_svc.looks_like_report_query(query):
+                        hits = ranking_svc.ensure_report_roots(hits)
+                    hits = _prefer_report_roots(hits, prefer=prefer_report_roots)
+                if not recall_budget.exhausted():
+                    hits = _apply_howto_help_recall(
                         conn,
                         entity,
                         query,
-                        kind=search_kind,
-                        include_borrowed=include_borrowed,
-                        limit=limit + offset,
+                        hits,
                         path_prefix=prefix,
-                        fts_hit_count=len(hits),
-                        needs_report_roots=(
-                            ranking_svc.looks_like_report_query(query)
-                            and not any(
-                                str(h.get("kind") or "") == "Report"
-                                and ranking_svc.is_root_object(h)
-                                for h in hits
-                            )
-                            and not _report_recall_blocked(query, hits)
-                        ),
-                    ),
-                )
-                if prefer_report_roots or ranking_svc.looks_like_report_query(query):
-                    hits = ranking_svc.ensure_report_roots(hits)
-                hits = _prefer_report_roots(hits, prefer=prefer_report_roots)
-                hits = _apply_howto_help_recall(
-                    conn,
-                    entity,
-                    query,
-                    hits,
-                    path_prefix=prefix,
-                    limit=limit + offset,
-                    stem_recall=False,
-                )
+                        limit=limit + offset,
+                        stem_recall=False,
+                        budget=recall_budget,
+                    )
             per_groups.append(hits)
+            recall_budgets.append(recall_budget)
     finally:
         conn.close()
 
@@ -1622,7 +1798,17 @@ def fts_search(
             "hits": len(items),
         },
     )
+    for rb in recall_budgets:
+        rb.attach_flags(out)
     out["hint"] = bottleneck_hint(str(out.get("bottleneck") or ""))
+    if out.get("sql_recall_skipped") and not items:
+        out["next_tool"] = out.get("next_tool") or "search_under"
+        skip_note = (
+            "sql_recall skipped unscoped mid-LIKE; "
+            "narrow with path_prefix / search_under / semantic_search"
+        )
+        base = str(out.get("hint") or "").strip()
+        out["hint"] = f"{base}; {skip_note}" if base else skip_note
     return out
 
 
@@ -1650,6 +1836,7 @@ def semantic_search(
     client = EmbeddingClient()
     vec_by_model: dict[str, list[float]] = {}
     per_groups: list[list[dict]] = []
+    recall_budgets: list[_SqlRecallBudget] = []
     fts_match = _fts_match_string(query)
     objects_sum = sum(int(e.get("object_count") or 0) for e in entities)
     conn = connect(settings.db_path)
@@ -1699,6 +1886,9 @@ def semantic_search(
             )
             if prefix:
                 hits = [h for h in hits if _path_under(str(h.get("path") or ""), prefix)]
+            # Outer SQL_RECALL_SPAN_BUDGET_MS over class-C STEM_RECALL_BUDGET_MS
+            # (nested, not a replacement). Separate budget-hit flags.
+            recall_budget = _SqlRecallBudget()
             with timer.span("sql_recall"):
                 # U41: skip unscoped token/report SQL when hybrid already has a
                 # content-covered root pool (howto/join) — that leg is the tax.
@@ -1707,6 +1897,7 @@ def semantic_search(
                     ranking_svc.looks_like_budget_exec_intent(query)
                     or "goods_return" in domains_pre
                 )
+                pool_strong = _pool_strong_for_token_sql(query, hits)
                 skip_token_sql = (
                     (
                         ranking_svc.looks_like_user_howto_query(query)
@@ -1714,8 +1905,8 @@ def semantic_search(
                     )
                     and _root_content_hits(query, hits)
                     >= ranking_svc.MIN_STEM_ROOT_HITS
-                )
-                if not skip_token_sql:
+                ) or pool_strong
+                if not skip_token_sql and not recall_budget.exhausted():
                     hits = _merge_sql_hits(
                         hits,
                         _sql_token_hits(
@@ -1727,6 +1918,8 @@ def semantic_search(
                             limit=top_n,
                             path_prefix=prefix,
                             fts_hit_count=len(hits),
+                            pool_strong=pool_strong,
+                            budget=recall_budget,
                             needs_report_roots=(
                                 ranking_svc.looks_like_report_query(query)
                                 and not skip_report_token
@@ -1739,18 +1932,21 @@ def semantic_search(
                             ),
                         ),
                     )
-                if ranking_svc.looks_like_report_query(query):
-                    hits = ranking_svc.ensure_report_roots(hits)
-                hits = _apply_howto_help_recall(
-                    conn,
-                    entity,
-                    query,
-                    hits,
-                    path_prefix=prefix,
-                    limit=top_n,
-                    stem_recall=True,
-                )
+                if not recall_budget.exhausted():
+                    if ranking_svc.looks_like_report_query(query):
+                        hits = ranking_svc.ensure_report_roots(hits)
+                    hits = _apply_howto_help_recall(
+                        conn,
+                        entity,
+                        query,
+                        hits,
+                        path_prefix=prefix,
+                        limit=top_n,
+                        stem_recall=True,
+                        budget=recall_budget,
+                    )
             per_groups.append(hits)
+            recall_budgets.append(recall_budget)
     finally:
         conn.close()
 
@@ -1799,6 +1995,16 @@ def semantic_search(
     out["bottleneck"] = snap.get("bottleneck") or ""
     out["scale"] = snap.get("scale") or {}
     out["hint"] = snap.get("hint") or ""
+    for rb in recall_budgets:
+        rb.attach_flags(out)
+    if out.get("sql_recall_skipped") and not results:
+        out["next_tool"] = out.get("next_tool") or "search_under"
+        skip_note = (
+            "sql_recall skipped unscoped mid-LIKE; "
+            "narrow with path_prefix / search_under"
+        )
+        base = str(out.get("hint") or "").strip()
+        out["hint"] = f"{base}; {skip_note}" if base else skip_note
     return out
 
 

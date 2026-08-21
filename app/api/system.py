@@ -34,6 +34,18 @@ def get_runtime():
     return mounts_svc.runtime_snapshot()
 
 
+@router.get("/mcp-busy")
+def get_mcp_busy(recent_window_sec: float = Query(60.0, ge=1.0, le=3600.0)):
+    """In-flight MCP tools + embed/reindex busy + recent completions (no UI).
+
+    Heartbeat is in-memory only (variant c): poll this endpoint while a tool
+    runs; app_log still gets one slow/error row on completion.
+    """
+    from app.services import mcp_busy
+
+    return mcp_busy.snapshot(recent_window_sec=float(recent_window_sec))
+
+
 @router.get("/browse")
 def browse_mount(
     mount_id: str = Query(..., min_length=1),

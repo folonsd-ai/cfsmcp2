@@ -199,7 +199,15 @@ def _retry_locked(fn, *args, **kwargs):
     last: BaseException | None = None
     for attempt in range(LOCKED_RETRIES + 1):
         try:
-            return fn(*args, **kwargs)
+            out = fn(*args, **kwargs)
+            if attempt > 0:
+                try:
+                    from app.services import mcp_busy
+
+                    mcp_busy.clear_waiting_flag()
+                except Exception:
+                    pass
+            return out
         except sqlite3.OperationalError as exc:
             last = exc
             if not _is_locked_error(exc) or attempt >= LOCKED_RETRIES:
@@ -211,6 +219,13 @@ def _retry_locked(fn, *args, **kwargs):
                 delay,
                 exc,
             )
+            # Lower bound of lock wait: retry sleeps only (busy_timeout is inside SQLite).
+            try:
+                from app.services import mcp_busy
+
+                mcp_busy.add_sqlite_wait(delay * 1000.0, retries=1)
+            except Exception:
+                pass
             time.sleep(delay)
             delay = min(delay * 2, 2.0)
     raise last  # pragma: no cover

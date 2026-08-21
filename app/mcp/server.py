@@ -91,10 +91,14 @@ mcp = FastMCP(
 
 
 def _track(name: str, fn, *, context: str = "", **tool_args):
+    from app.services import mcp_busy
+
     t0 = time.perf_counter()
     ok = True
     detail = ""
     result = None
+    call_id = mcp_busy.begin(name, context=context or "")
+    busy_summary = None
     try:
         result = fn()
         if isinstance(result, dict) and result.get("error"):
@@ -106,6 +110,7 @@ def _track(name: str, fn, *, context: str = "", **tool_args):
         detail = str(exc)[:800]
         raise
     finally:
+        busy_summary = mcp_busy.end(call_id)
         ms = (time.perf_counter() - t0) * 1000
         # Persist handled below with replayable args (not the short usage line).
         usage_stats.record(
@@ -129,6 +134,7 @@ def _track(name: str, fn, *, context: str = "", **tool_args):
                 result=result,
                 error=detail,
                 ok=ok,
+                busy=busy_summary,
             )
             not_found = "not found in context" in detail
             if not ok:

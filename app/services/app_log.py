@@ -99,6 +99,10 @@ def summarize_result(value: Any, *, limit: int = MAX_RESULT_SUMMARY_CHARS) -> st
                         "match_mode",
                         "total",
                         "truncated",
+                        "sql_recall_budget_hit",
+                        "stem_recall_budget_hit",
+                        "sql_recall_skipped",
+                        "next_tool",
                     )
                     if k in value
                 }
@@ -136,6 +140,7 @@ def format_mcp_replay_detail(
     result: Any = None,
     error: str = "",
     ok: bool = True,
+    busy: dict | None = None,
 ) -> str:
     """Multi-line detail: enough to replay the MCP tool call without the DB UI."""
     if threshold_ms is None:
@@ -154,6 +159,16 @@ def format_mcp_replay_detail(
     if error:
         lines.append(f"error={error}")
 
+    if isinstance(busy, dict) and busy:
+        sw = float(busy.get("sqlite_wait_ms") or 0)
+        zw = float(busy.get("zvec_wait_ms") or 0)
+        if sw > 0 or zw > 0 or int(busy.get("sqlite_lock_retries") or 0):
+            lines.append(
+                "busy_wait="
+                f"sqlite_ms={sw:.0f} zvec_ms={zw:.0f} "
+                f"sqlite_retries={int(busy.get('sqlite_lock_retries') or 0)}"
+            )
+
     # Prefer measured phase timing from the tool result (search / usages / …).
     if isinstance(result, dict):
         bottleneck = result.get("bottleneck")
@@ -164,6 +179,12 @@ def format_mcp_replay_detail(
             lines.append(f"bottleneck={bottleneck}")
         if hint:
             lines.append(f"hint={hint}")
+        if result.get("sql_recall_budget_hit"):
+            lines.append("sql_recall_budget_hit=yes")
+        if result.get("stem_recall_budget_hit"):
+            lines.append("stem_recall_budget_hit=yes")
+        if result.get("sql_recall_skipped"):
+            lines.append(f"sql_recall_skipped={result.get('sql_recall_skipped')}")
         if isinstance(timing, dict) and timing:
             lines.append("timing_ms=")
             lines.append(_json_dump(timing, limit=800))

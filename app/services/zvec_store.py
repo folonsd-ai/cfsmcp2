@@ -4,6 +4,7 @@ import gc
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +25,27 @@ class ZvecStore:
         # key -> (collection, read_only)
         self._collections: dict[str, tuple[Any, bool]] = {}
 
+    def _acquire(self) -> float:
+        """Acquire store lock; return wait_ms until grant (0 if uncontended)."""
+        t0 = time.perf_counter()
+        self._lock.acquire()
+        return (time.perf_counter() - t0) * 1000.0
+
+    def _release(self) -> None:
+        self._lock.release()
+
     def get(self, path: Path | str, *, read_only: bool = True) -> Any:
         p = Path(path)
         key = _key(p)
-        with self._lock:
+        wait_ms = self._acquire()
+        try:
+            if wait_ms > 0.05:
+                try:
+                    from app.services import mcp_busy
+
+                    mcp_busy.add_zvec_wait(wait_ms)
+                except Exception:
+                    pass
             cached = self._collections.get(key)
             if cached is not None:
                 coll, ro = cached
@@ -46,11 +64,35 @@ class ZvecStore:
             self._collections[key] = (coll, read_only)
             log.debug("opened zvec collection %s read_only=%s", key, read_only)
             return coll
+        finally:
+            try:
+                from app.services import mcp_busy
+
+                mcp_busy.clear_waiting_flag()
+            except Exception:
+                pass
+            self._release()
 
     def release(self, path: Path | str) -> None:
         key = _key(path)
-        with self._lock:
+        wait_ms = self._acquire()
+        try:
+            if wait_ms > 0.05:
+                try:
+                    from app.services import mcp_busy
+
+                    mcp_busy.add_zvec_wait(wait_ms)
+                except Exception:
+                    pass
             self._close_unlocked(key)
+        finally:
+            try:
+                from app.services import mcp_busy
+
+                mcp_busy.clear_waiting_flag()
+            except Exception:
+                pass
+            self._release()
 
     def _close_unlocked(self, key: str) -> None:
         cached = self._collections.pop(key, None)
