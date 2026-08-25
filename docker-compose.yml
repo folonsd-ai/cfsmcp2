@@ -1,0 +1,34 @@
+services:
+  cfsmcp2:
+    build: .
+    ports:
+      - "8559:8559"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8559"
+      METADATA_DIR: /data/metadata
+      DUMPS_DIR: /data/dumps
+      DB_PATH: /data/cfsmcp2.sqlite3
+      ZVEC_DIR: /data/zvec
+      LM_STUDIO_URL: http://host.docker.internal:1234
+      EMBEDDING_WORKERS: "2"
+      EMBEDDING_BATCH_SIZE: "128"
+      # POSIX TZ (no tzdata in image). UTC-3 = UTC+3. rebuild.bat sets from host.
+      TZ: ${TZ:-UTC-3}
+      # auto | docker | native — UI path delivery; auto detects /.dockerenv
+      RUNTIME_MODE: auto
+      # Named mounts (id=/container/path). Bind the PARENT of a dump (or higher),
+      # not the folder that contains Configuration.xml — UI browse cannot go up.
+      MOUNT_POINTS: erp=/mnt/erp,dumps=/mnt/dumps
+    volumes:
+      - ./data:/data
+      # Host parent dirs visible inside the container (edit host paths for your machine):
+      - w:/AI/projects/mira/cf:/mnt/erp
+      - w:/AI/projects/dumps:/mnt/dumps
+      # - W:/path/to/ut11:/mnt/ut11
+      # Linux/macOS examples:
+      # - /home/user/1c:/mnt/erp
+      # - /Users/user/1c:/mnt/dumps
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -1,0 +1,17 @@
+# Normalize text files; let Git pick EOL for the platform.
+* text=auto
+
+*.py text
+*.md text
+*.yml text
+*.yaml text
+*.toml text
+*.txt text
+*.html text
+*.js text
+*.json text
+*.css text
+
+*.png binary
+*.jpg binary
+*.ico binary

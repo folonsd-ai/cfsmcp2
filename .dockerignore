@@ -1,0 +1,16 @@
+.git
+.cursor
+.venv
+discussion
+data
+scratch
+scripts
+_tmp*
+.tmp*
+.playwright-browsers
+__pycache__
+*.pyc
+/_*.py
+*.md
+.env*
+*.zip
