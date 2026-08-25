@@ -1,6 +1,6 @@
 # ARCHITECTURE — cfsmcp2
 
-Версия документа: **1.5** · дата: **2026-08-24** · продукт **0.2.17**
+Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.18**
 
 ---
 
@@ -30,7 +30,7 @@
 │  Browser UI (index.html, i18n.js, ide-console.css, JSZip, Chart.js) │
 │  GET /  ·  /static/                                         │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI (app/main.py)  version 0.2.17                      │
+│  FastAPI (app/main.py)  version 0.2.18                      │
 │  /api/*  ·  /mcp/  (Streamable HTTP, FastMCP)               │
 ├──────────────┬──────────────────────┬───────────────────────┤
 │  SQLite      │  zvec (per entity)   │  LM Studio :1234      │
