@@ -53,7 +53,9 @@ mcp = FastMCP(
         "- After FTS miss on an exact identifier: retry search_metadata / find_methods WITHOUT "
         "literal (exact/prefix), or literal=true WITH path_prefix/parent_path.\n"
         "- Error / message text in BSL → find_code_references(identifier, parent_path=module "
-        "or object from a prior hit). Unscoped find_code_references on a large dump is refused.\n"
+        "or object from a prior hit, e.g. ОбщиеМодули.ИмяМодуля). "
+        "Never use a collection root alone (Обработки, ОбщиеМодули, Документы) — refused. "
+        "Unscoped find_code_references on a large dump is refused.\n"
         "- get_method sets index_stale when the dump file is newer than the last index; "
         "body then comes from disk. get_indexing_status may set index_stale on dump entities "
         "when Configuration.xml / ConfigDumpInfo.xml drifted — refresh before trusting search.\n"
@@ -1101,8 +1103,8 @@ def find_code_references(
         str | None,
         Field(
             description=(
-                "Module/object path prefix from a prior hit (required on large dumps). "
-                "Example: ОбщиеМодули.X"
+                "Concrete module/object from a prior hit (required on large dumps). "
+                "Example: ОбщиеМодули.ИмяМодуля — not the collection root ОбщиеМодули."
             )
         ),
     ] = None,
@@ -1113,14 +1115,16 @@ def find_code_references(
         Field(
             description=(
                 "Prefer dump files on disk (freshest) for an identifier. "
-                "Always pass parent_path on large dumps; unscoped body search is refused."
+                "Always pass a concrete parent_path (module/object); "
+                "unscoped or collection-root parent is refused."
             )
         ),
     ] = False,
 ) -> dict:
     """Where an identifier appears in method bodies (index code/full, or dump files).
 
-    Pass parent_path from a prior hit. Unscoped search on a large dump is refused.
+    Pass a concrete parent_path from a prior hit (module/object). Collection roots
+    (ОбщиеМодули, Обработки, …) and unscoped search on a large dump are refused.
     """
 
     def _run():

@@ -1406,6 +1406,64 @@ def _method_hit_under_parent(path: str, parent_path: str | None) -> bool:
     return _method_parent_from_path(p) == pref
 
 
+# Collection roots (no object name): body grep under these is still ERP-wide I/O.
+_COLLECTION_ROOT_NAMES = frozenset(
+    {
+        "Документы",
+        "Documents",
+        "Справочники",
+        "Catalogs",
+        "Отчеты",
+        "Reports",
+        "Обработки",
+        "DataProcessors",
+        "РегистрыСведений",
+        "InformationRegisters",
+        "РегистрыНакопления",
+        "AccumulationRegisters",
+        "РегистрыБухгалтерии",
+        "AccountingRegisters",
+        "РегистрыРасчета",
+        "CalculationRegisters",
+        "ОбщиеМодули",
+        "CommonModules",
+        "ОбщиеФормы",
+        "CommonForms",
+        "Роли",
+        "Roles",
+        "Константы",
+        "Constants",
+        "ФункциональныеОпции",
+        "FunctionalOptions",
+        "HTTPСервисы",
+        "HTTPServices",
+        "WebСервисы",
+        "WebServices",
+        "РегламентныеЗадания",
+        "ScheduledJobs",
+        "Перечисления",
+        "Enums",
+        "ПланыВидовХарактеристик",
+        "ChartsOfCharacteristicTypes",
+        "ПланыОбмена",
+        "ExchangePlans",
+        "БизнесПроцессы",
+        "BusinessProcesses",
+        "Задачи",
+        "Tasks",
+    }
+)
+_COLLECTION_ROOT_NAMES_CF = frozenset(n.casefold() for n in _COLLECTION_ROOT_NAMES)
+
+
+def _is_collection_root_path(parent_path: str | None) -> bool:
+    """True for ``Обработки`` / ``ОбщиеМодули`` (no object) — not ``ОбщиеМодули.X``."""
+    pref = (parent_path or "").strip().rstrip(".")
+    if not pref or "." in pref:
+        return False
+    return pref in _COLLECTION_ROOT_NAMES or pref.casefold() in _COLLECTION_ROOT_NAMES_CF
+
+
 def _unscoped_body_search_blocked(entity: dict, parent_path: str | None) -> bool:
     """True when dump-wide method/body grep would scan a large context."""
     if (parent_path or "").strip():
@@ -1417,6 +1475,11 @@ def _unscoped_body_search_blocked(entity: dict, parent_path: str | None) -> bool
     if methods == 0 and objects > _UNSCOPED_BODY_SEARCH_MAX_OBJECTS:
         return True
     return False
+
+
+def _body_search_parent_too_broad(parent_path: str | None) -> bool:
+    """Collection-level parent still greps thousands of .bsl files."""
+    return _is_collection_root_path(parent_path)
 
 
 def _looks_like_method_identifier(query: str) -> bool:
@@ -3947,7 +4010,41 @@ def find_code_references(
                 "hint": (
                     "Body search without parent_path scans the whole dump. "
                     "Locate the module/object first (find_methods / search_metadata), "
-                    "then retry with parent_path."
+                    "then retry with parent_path like ОбщиеМодули.ИмяМодуля "
+                    "(not the collection root ОбщиеМодули)."
+                ),
+                "next_tool": "find_methods",
+            }
+            attach_timing(
+                out,
+                timer,
+                scale={
+                    "objects": int(entity.get("object_count") or 0),
+                    "methods": int(entity.get("bsl_method_count") or 0),
+                    "limit": limit,
+                },
+            )
+            return out
+
+        if _body_search_parent_too_broad(parent_filter):
+            out = {
+                "context": entity["name"],
+                "name": name,
+                "load_mode": mode,
+                "source": "",
+                "match_mode": "literal" if literal else "index",
+                "parent_path": parent_filter,
+                "parent_too_broad": True,
+                "total": 0,
+                "offset": offset,
+                "limit": limit,
+                "truncated": False,
+                "results": [],
+                "hint": (
+                    f"parent_path={parent_filter!r} is a metadata collection root — "
+                    "body search would scan thousands of modules. "
+                    "Pass a concrete object/module from a hit "
+                    "(e.g. ОбщиеМодули.ОбменСГИСЭПД or Документы.ЭлектроннаяТранспортнаяНакладная)."
                 ),
                 "next_tool": "find_methods",
             }
