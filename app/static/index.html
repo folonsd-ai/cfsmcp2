@@ -454,11 +454,39 @@
     .mount-browse-mount select {
       width:100%; padding:6px 8px; font-size:12px;
     }
+    .source-field-row {
+      display:grid;
+      grid-template-columns:minmax(8.5em, 12em) minmax(0, 1fr);
+      gap:6px 10px;
+      align-items:center;
+      margin-top:8px;
+    }
+    .source-field-label {
+      font-size:12.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+      color:var(--muted); line-height:1.25; min-width:0;
+    }
     .source-path-row {
-      display:flex; gap:8px; align-items:stretch; margin-top:4px;
+      display:flex; gap:8px; align-items:stretch; min-width:0;
     }
     .source-path-row input { flex:1; min-width:0; }
     .source-path-row button { flex:0 0 auto; white-space:nowrap; }
+    .source-comment-field { align-items:start; }
+    .source-comment-field .source-field-label { padding-top:10px; }
+    .source-comment-row {
+      display:flex; gap:8px; align-items:stretch; min-width:0;
+    }
+    .source-comment-row textarea {
+      flex:1; min-width:0; min-height:64px; resize:vertical;
+      font-family:var(--font-mono, ui-monospace, monospace); font-size:14px;
+      padding:12px 13px; border-radius:9px;
+      border:1px solid var(--border-strong); background:var(--input); color:var(--text);
+      box-sizing:border-box;
+    }
+    .source-comment-row .source-comment-refresh {
+      flex:0 0 auto; align-self:flex-start; width:40px; height:40px;
+      display:inline-flex; align-items:center; justify-content:center; padding:0;
+    }
+    .source-comment-row .source-comment-refresh svg { width:18px; height:18px; }
     .source-path-suggest {
       margin:8px 0 0; padding:8px 10px; border:1px solid var(--border); border-radius:8px;
       background:var(--surface); font-size:12px;
@@ -2279,17 +2307,30 @@
 
       <section class="source-section" id="sourceSectionCatalog">
         <h3 class="section-title" data-i18n="source.section.catalog">Каталог</h3>
-        <div class="field">
-          <label data-i18n-label="source.path"><span class="i18n-label">Каталог / файл источника</span></label>
+        <div class="source-field-row" id="sourcePathRow">
+          <span class="source-field-label" data-i18n="source.path">Каталог / файл источника</span>
           <div class="source-path-row">
             <input type="text" id="sourcePathField" autocomplete="off" spellcheck="false" />
             <button id="sourceBrowseMountBtn" type="button" class="btn secondary" hidden data-i18n="ingest.browsePath">Обзор…</button>
           </div>
-          <p class="ingest-hint hint" id="sourceCatalogHint" data-i18n="source.catalogHint">Абсолютный путь: «Сохранить» — без загрузки; «Загрузить» — import-path.</p>
         </div>
+        <p class="ingest-hint hint" id="sourceCatalogHint" data-i18n="source.catalogHint">Абсолютный путь: «Сохранить» — без загрузки; «Загрузить» — import-path.</p>
         <div class="source-path-suggest" id="sourcePathSuggest" hidden>
           <div id="sourcePathSuggestTitle" data-i18n="source.pathMissing">Источник недоступен. Похожие каталоги в точках подключения:</div>
           <ul id="sourcePathSuggestList"></ul>
+        </div>
+        <div class="source-field-row source-comment-field" id="sourceCommentWrap">
+          <span class="source-field-label" data-i18n="source.comment">Комментарий</span>
+          <div class="source-comment-row">
+            <textarea id="sourceCommentField" rows="2" autocomplete="off" spellcheck="false"
+              data-i18n-placeholder="ingest.commentPh" placeholder="имя, версия, дата время"
+              data-i18n-title="source.commentHint" title=""></textarea>
+            <button type="button" class="btn secondary icon source-comment-refresh" id="sourceCommentRefreshBtn"
+              data-i18n-title="source.commentRefresh" data-i18n-aria="source.commentRefresh"
+              title="Обновить комментарий из источника" aria-label="Обновить комментарий из источника">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15.5-6.4"/><polyline points="3 4 3 10 9 10"/><path d="M3 12a9 9 0 0 0 15.5 6.4"/><polyline points="21 20 21 14 15 14"/></svg>
+            </button>
+          </div>
         </div>
         <div class="row">
           <button id="sourceDirLoadBtn" type="button" class="btn primary" data-i18n="source.loadDir">Загрузить</button>
@@ -2442,6 +2483,10 @@
     let ingestPeekGen = 0;
     let pendingDirFiles = null;
     let sourceModalEntityId = null;
+    let sourceCommentAuto = '';
+    let sourceCommentStamp = '';
+    let sourceVersionAuto = '';
+    let sourcePeekGen = 0;
     let runtimeInfo = { mode: 'native', mounts: [], pick_path_available: true, path_delivery: 'native_path', mounts_configured: false };
     let mountBrowseState = { mountId: '', rel: '', selectedPath: '', resolve: null };
 
@@ -3550,6 +3595,71 @@
       if (loadBtn) loadBtn.textContent = t(isDump ? 'source.loadDir' : 'source.loadFile');
     }
 
+    function setSourceCommentValue(comment, { force } = {}) {
+      const inp = document.getElementById('sourceCommentField');
+      if (!inp) return;
+      const next = String(comment || '').trim();
+      const cur = inp.value.trim();
+      if (force || !cur || cur === sourceCommentAuto) {
+        inp.value = next;
+        sourceCommentAuto = next;
+      }
+    }
+
+    function refreshSourceAutoComment({ force, bumpStamp, name } = {}) {
+      if (bumpStamp || force || !sourceCommentStamp) sourceCommentStamp = formatIngestStamp();
+      const e = sourceModalEntityId != null ? entitiesById[sourceModalEntityId] : null;
+      const nm = String(name != null ? name : (e?.name || '')).trim();
+      setSourceCommentValue(buildIngestAutoComment(nm, sourceVersionAuto, sourceCommentStamp), { force });
+    }
+
+    async function peekSourceCommentFromPath(path, { force } = {}) {
+      const p = String(path || '').trim();
+      const gen = ++sourcePeekGen;
+      if (!p || !isAbsoluteLocalPath(p)) {
+        if (gen === sourcePeekGen && force) {
+          sourceVersionAuto = '';
+          refreshSourceAutoComment({ force: true, bumpStamp: true });
+        }
+        return;
+      }
+      try {
+        const q = new URLSearchParams({ source_path: p });
+        const res = await fetch('/api/system/peek-source?' + q.toString());
+        if (gen !== sourcePeekGen) return;
+        if (!res.ok) {
+          if (force) {
+            sourceVersionAuto = '';
+            refreshSourceAutoComment({ force: true, bumpStamp: true });
+          }
+          return;
+        }
+        const data = await res.json();
+        if (gen !== sourcePeekGen) return;
+        if (!(data && data.ok)) {
+          if (force) {
+            sourceVersionAuto = '';
+            refreshSourceAutoComment({ force: true, bumpStamp: true });
+          }
+          return;
+        }
+        sourceVersionAuto = String(data.version || '').trim();
+        const e = sourceModalEntityId != null ? entitiesById[sourceModalEntityId] : null;
+        const name = String(data.name || e?.name || '').trim();
+        refreshSourceAutoComment({ force: !!force, bumpStamp: true, name });
+      } catch (_) {
+        if (gen === sourcePeekGen && force) {
+          sourceVersionAuto = '';
+          refreshSourceAutoComment({ force: true, bumpStamp: true });
+        }
+      }
+    }
+
+    function onSourcePathSelected(path) {
+      const p = String(path || '').trim();
+      if (p) void peekSourceCommentFromPath(p);
+    }
+
     async function refreshSourcePathSuggestions(path) {
       const box = document.getElementById('sourcePathSuggest');
       const list = document.getElementById('sourcePathSuggestList');
@@ -3573,8 +3683,10 @@
         </li>`).join('');
       list.querySelectorAll('.source-suggest-btn').forEach((btn) => {
         btn.onclick = () => {
-          document.getElementById('sourcePathField').value = btn.dataset.path || '';
+          const next = btn.dataset.path || '';
+          document.getElementById('sourcePathField').value = next;
           box.hidden = true;
+          onSourcePathSelected(next);
         };
       });
     }
@@ -3584,8 +3696,15 @@
       if (!e) return;
       await loadRuntimeInfo();
       sourceModalEntityId = id;
+      sourcePeekGen += 1;
+      sourceVersionAuto = String(e.version || '').trim();
+      sourceCommentStamp = '';
       const path = e.source_path || e.file_path || '';
       document.getElementById('sourcePathField').value = path;
+      const commentInp = document.getElementById('sourceCommentField');
+      const comment = String(e.comment || '');
+      if (commentInp) commentInp.value = comment;
+      sourceCommentAuto = comment.trim();
       syncSourceModalForEntity(e);
       const reindexBtn = document.getElementById('sourceReindexBtn');
       if (reindexBtn) reindexBtn.disabled = busy.has(e.status);
@@ -3602,29 +3721,42 @@
     }
     function closeSourceModal() {
       sourceModalEntityId = null;
+      sourcePeekGen += 1;
+      sourceCommentAuto = '';
+      sourceCommentStamp = '';
+      sourceVersionAuto = '';
       document.getElementById('sourceModal').classList.remove('open');
       document.getElementById('sourceModal').setAttribute('aria-hidden', 'true');
     }
 
-    async function saveSourcePathIfChanged() {
+    async function saveSourceModalChanges() {
       const id = sourceModalEntityId;
       if (!id) return { saved: false, error: null };
       const e = entitiesById[id];
       if (!e) return { saved: false, error: null };
-      const next = (document.getElementById('sourcePathField').value || '').trim();
-      const prev = (e.source_path || e.file_path || '').trim();
-      if (next === prev) return { saved: false, error: null, unchanged: true };
-      if (busy.has(e.status)) {
+      const nextPath = (document.getElementById('sourcePathField').value || '').trim();
+      const prevPath = (e.source_path || e.file_path || '').trim();
+      const nextComment = (document.getElementById('sourceCommentField')?.value != null)
+        ? String(document.getElementById('sourceCommentField').value)
+        : '';
+      const prevComment = String(e.comment || '');
+      const pathChanged = nextPath !== prevPath;
+      const commentChanged = nextComment !== prevComment;
+      if (!pathChanged && !commentChanged) return { saved: false, error: null, unchanged: true };
+      if (busy.has(e.status) && pathChanged) {
         return { saved: false, error: t('dnd.busyRow') };
       }
-      if (next && !isAbsoluteLocalPath(next)) {
+      if (pathChanged && nextPath && !isAbsoluteLocalPath(nextPath)) {
         return { saved: false, error: t('upload.pathMustBeAbsolute') };
       }
+      const body = {};
+      if (pathChanged) body.source_path = nextPath;
+      if (commentChanged) body.comment = nextComment;
       try {
         const res = await fetch('/api/entities/' + id, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path: next }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) {
           const text = await res.text();
@@ -3638,6 +3770,12 @@
         }
         const updated = await res.json();
         entitiesById[id] = { ...(entitiesById[id] || {}), ...updated };
+        const cached = allEntitiesCache.find((row) => row.id === id);
+        if (cached) {
+          if (updated.comment != null) cached.comment = updated.comment || '';
+          if (updated.source_path != null) cached.source_path = updated.source_path || '';
+          if (updated.file_path != null) cached.file_path = updated.file_path || '';
+        }
         return { saved: true, error: null };
       } catch (err) {
         return { saved: false, error: String(err && err.message ? err.message : err) };
@@ -3645,7 +3783,7 @@
     }
 
     async function saveSourceModalPath() {
-      const result = await saveSourcePathIfChanged();
+      const result = await saveSourceModalChanges();
       if (result.error) {
         await showAlert(result.error, t('source.pathSaveError'));
         return;
@@ -3664,20 +3802,41 @@
       }
       const start = mountBrowseStartFromPath(document.getElementById('sourcePathField')?.value || '');
       const path = await openMountBrowse(start.mountId, start.initialRel);
-      if (path) document.getElementById('sourcePathField').value = path;
+      if (path) {
+        document.getElementById('sourcePathField').value = path;
+        onSourcePathSelected(path);
+      }
     };
     document.getElementById('closeSourceModal').onclick = closeSourceModal;
     document.getElementById('cancelSourceModal').onclick = closeSourceModal;
     document.getElementById('saveSourceModal').onclick = () => { void saveSourceModalPath(); };
+    document.getElementById('sourcePathField')?.addEventListener('change', () => {
+      const p = String(document.getElementById('sourcePathField')?.value || '').trim();
+      onSourcePathSelected(p);
+    });
+    document.getElementById('sourceCommentRefreshBtn')?.addEventListener('click', () => {
+      const p = String(document.getElementById('sourcePathField')?.value || '').trim();
+      void peekSourceCommentFromPath(p, { force: true });
+    });
     document.getElementById('sourceModal').addEventListener('click', (ev) => {
       if (ev.target.id === 'sourceModal') closeSourceModal();
     });
     document.getElementById('sourceUploadBtn').onclick = async () => {
       const id = sourceModalEntityId;
       const path = (document.getElementById('sourcePathField').value || '').trim();
+      const comment = document.getElementById('sourceCommentField')?.value != null
+        ? String(document.getElementById('sourceCommentField').value)
+        : '';
+      if (id) {
+        const result = await saveSourceModalChanges();
+        if (result.error) {
+          await showAlert(result.error, t('source.pathSaveError'));
+          return;
+        }
+      }
       if (id && isAbsoluteLocalPath(path)) {
         closeSourceModal();
-        await doImportPath({ sourcePath: path, entityId: id });
+        await doImportPath({ sourcePath: path, entityId: id, comment });
         return;
       }
       closeSourceModal();
@@ -3704,9 +3863,17 @@
       const e = entitiesById[id];
       if (!e || busy.has(e.status)) return showAlert(t('dnd.busyRow'), t('source.loadDir'));
       const path = (document.getElementById('sourcePathField').value || '').trim();
+      const comment = document.getElementById('sourceCommentField')?.value != null
+        ? String(document.getElementById('sourceCommentField').value)
+        : '';
+      const result = await saveSourceModalChanges();
+      if (result.error) {
+        await showAlert(result.error, t('source.pathSaveError'));
+        return;
+      }
       if (isAbsoluteLocalPath(path)) {
         closeSourceModal();
-        await doImportPath({ sourcePath: path, entityId: id });
+        await doImportPath({ sourcePath: path, entityId: id, comment });
         return;
       }
       if (e.source_mode === 'dump') {
@@ -7458,8 +7625,10 @@
       if (entityId) body.entity_id = entityId;
       const n = String(name != null ? name : (document.getElementById('name').value || '')).trim();
       if (n && !entityId) body.name = n;
-      const c = String(comment != null ? comment : (document.getElementById('ingestComment')?.value || '')).trim();
-      if (c && !entityId) body.comment = c;
+      let c = '';
+      if (comment != null) c = String(comment).trim();
+      else if (!entityId) c = String(document.getElementById('ingestComment')?.value || '').trim();
+      if (c) body.comment = c;
       if (profile) body.ingest_profile = JSON.stringify(profile);
       const useModel = String(model != null ? model : resolveIngestModel()).trim();
       if (useModel && !entityId) body.model = useModel;

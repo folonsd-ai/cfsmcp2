@@ -1918,8 +1918,51 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   padding-top: 16px; margin-top: 16px;
 }
 #sourceModal .source-section:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
-#sourceModal .source-path-row { display: flex; gap: 8px; margin-bottom: 8px; }
-#sourceModal .source-path-row input { flex: 1; padding: 12px 13px !important; border-radius: 9px !important; }
+#sourceModal .source-field-row {
+  display: grid !important;
+  grid-template-columns: minmax(8.5em, 12em) minmax(0, 1fr) !important;
+  gap: 6px 10px !important;
+  align-items: center !important;
+  margin: 8px 0 !important;
+}
+#sourceModal .source-field-label {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .04em !important;
+  color: var(--color-muted-foreground) !important;
+  line-height: 1.25 !important;
+  min-width: 0;
+}
+#sourceModal .source-path-row {
+  display: flex !important; gap: 8px !important; align-items: stretch !important;
+  margin: 0 !important; min-width: 0;
+}
+#sourceModal .source-path-row input {
+  flex: 1; min-width: 0; padding: 12px 13px !important; border-radius: 9px !important;
+}
+#sourceModal .source-comment-field { align-items: start !important; }
+#sourceModal .source-comment-field .source-field-label { padding-top: 10px; }
+#sourceModal .source-comment-row {
+  display: flex !important; gap: 8px !important; align-items: stretch !important;
+  margin: 0 !important; min-width: 0;
+}
+#sourceModal .source-comment-row textarea {
+  flex: 1; min-width: 0; min-height: 64px; resize: vertical;
+  font-family: var(--font-mono) !important; font-size: 14px !important;
+  padding: 12px 13px !important; border-radius: 9px !important;
+  border: 1px solid var(--color-border-soft) !important;
+  background: var(--color-card) !important; color: var(--color-foreground) !important;
+  box-sizing: border-box;
+}
+#sourceModal .source-comment-refresh {
+  flex: 0 0 auto; align-self: flex-start; width: 40px; height: 40px;
+  display: inline-flex !important; align-items: center; justify-content: center;
+  padding: 0 !important; border-radius: 8px !important;
+  border: 1px solid var(--color-border-soft) !important;
+  background: var(--color-card) !important; color: var(--color-foreground) !important;
+}
+#sourceModal .source-comment-refresh svg { width: 18px; height: 18px; }
 #sourceModal .source-section > button,
 #sourceModal .source-section .row > button {
   appearance: none; border: 1px solid var(--color-border-soft);
