@@ -47,7 +47,9 @@ TOOLS_RU: dict[str, dict] = {
             "повторно для каждого контекста из list_contexts с одним запросом. "
             "tag:… — только при поиске по группе тега.\n"
             "После нахождения родителя предпочитайте path_prefix / search_under.\n"
-            "literal=true без path_prefix — только точное имя/путь, не фраза."
+            "literal=true без path_prefix — только точное имя/путь, не фраза.\n"
+            "Корень коллекции как path_prefix (Документы, Отчеты, …) — "
+            "path_prefix_too_broad; нужен путь конкретного объекта."
         ),
         "parameters": {
             "context": _CTX,
@@ -56,10 +58,14 @@ TOOLS_RU: dict[str, dict] = {
             "include_borrowed": "Включать заимствованные объекты",
             "limit": "Размер страницы",
             "offset": "Смещение для постраничной выдачи",
-            "path_prefix": "Только пути под этим префиксом, напр. Документы.КонтурЛогистика_ДФ_Титул1",
+            "path_prefix": (
+                "Путь объекта, не корень коллекции "
+                "(Документы.Имя, не Документы)"
+            ),
             "compact": "Компактные хиты (path/kind/name/synonym/comment/score)",
             "literal": (
-                "Без path_prefix — точное name/path; mid-string только с path_prefix. "
+                "Без path_prefix — точное name/path; mid-string только с путём "
+                "объекта. Корень коллекции → path_prefix_too_broad. "
                 "Один идентификатор, не фраза."
             ),
         },

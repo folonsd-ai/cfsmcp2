@@ -1924,6 +1924,7 @@ def _literal_metadata_search(
     """SQL substring path for exact identifiers / error fragments (no FTS)."""
     q = (query or "").strip()
     objects_sum = sum(int(e.get("object_count") or 0) for e in entities)
+    raw_prefix = (path_prefix or "").strip() or None
     if len(q) < 2:
         out = {
             "context": ref,
@@ -1937,8 +1938,38 @@ def _literal_metadata_search(
             "results": [],
             "hint": "literal=true requires query length ≥ 2",
         }
-        if path_prefix:
-            out["path_prefix"] = path_prefix
+        if raw_prefix:
+            out["path_prefix"] = raw_prefix
+        attach_timing(
+            out,
+            timer,
+            scale={"objects": objects_sum, "contexts": len(entities), "limit": limit, "hits": 0},
+        )
+        return out
+
+    # Guard on caller-supplied path_prefix only (before kind=Report injects
+    # Отчеты.). Synthetic report default uses R2 stem lane below — not too_broad.
+    if _is_collection_root_path(raw_prefix):
+        out = {
+            "context": ref,
+            "contexts": [e["name"] for e in entities],
+            "tag": tag,
+            "match_mode": "literal",
+            "path_prefix": raw_prefix,
+            "path_prefix_too_broad": True,
+            "total_returned": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+            "results": [],
+            "hint": (
+                f"path_prefix={raw_prefix!r} is a metadata collection root — "
+                "literal mid-string would scan the whole tree. "
+                "Pass a concrete object path (e.g. Документы.ИмяДокумента), "
+                "or search_metadata without literal / semantic_search first."
+            ),
+            "next_tool": "search_metadata",
+        }
         attach_timing(
             out,
             timer,
@@ -1948,22 +1979,46 @@ def _literal_metadata_search(
 
     # kind=Report: widen like FTS (roots often lack kind=Report in dump).
     search_kind, prefix, prefer_report_roots = _report_search_scope(kind, path_prefix)
+    # R2: synthetic Отчеты. inject → stem/collapse lane, not full mid search_literal.
+    report_stem_lane = bool(prefer_report_roots and raw_prefix is None)
     fetch_n = max(limit + offset, limit)
     per_groups: list[list[dict]] = []
     conn = connect(settings.db_path)
     try:
         for entity in entities:
             with timer.span("literal"):
-                hits = obj_repo.search_literal(
-                    conn,
-                    int(entity["id"]),
-                    q,
-                    kind=search_kind,
-                    include_borrowed=include_borrowed,
-                    path_prefix=prefix,
-                    exclude_methods=not _bsl_enabled(entity),
-                    limit=fetch_n,
-                )
+                if report_stem_lane:
+                    stem_hits = obj_repo.search_by_stem_roots(
+                        conn,
+                        int(entity["id"]),
+                        q,
+                        path_prefix=(prefix or _DEFAULT_REPORT_PATH_PREFIX).rstrip("."),
+                        include_borrowed=include_borrowed,
+                        limit=fetch_n,
+                    )
+                    hits = [
+                        {
+                            "path": h.get("path"),
+                            "kind": h.get("kind"),
+                            "belong": h.get("belong"),
+                            "name": h.get("name"),
+                            "synonym": h.get("synonym") or "",
+                            "comment": h.get("comment") or "",
+                            "score": float(h.get("score") or 1.0),
+                        }
+                        for h in stem_hits
+                    ]
+                else:
+                    hits = obj_repo.search_literal(
+                        conn,
+                        int(entity["id"]),
+                        q,
+                        kind=search_kind,
+                        include_borrowed=include_borrowed,
+                        path_prefix=prefix,
+                        exclude_methods=not _bsl_enabled(entity),
+                        limit=fetch_n,
+                    )
             for h in hits:
                 h["context"] = entity["name"]
             if prefer_report_roots or ranking_svc.looks_like_report_query(q):
@@ -2015,6 +2070,8 @@ def _literal_metadata_search(
         }
     if prefix:
         out["path_prefix"] = prefix
+    if report_stem_lane:
+        out["literal_lane"] = "report_stem"
     warn = None if tag else _note_fanout(q, [e["name"] for e in entities])
     if warn:
         out["fanout_warning"] = warn

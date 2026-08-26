@@ -1,6 +1,6 @@
 # ARCHITECTURE — cfsmcp2
 
-Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.18**
+Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.19**
 
 ---
 
@@ -30,7 +30,7 @@
 │  Browser UI (index.html, i18n.js, ide-console.css, JSZip, Chart.js) │
 │  GET /  ·  /static/                                         │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI (app/main.py)  version 0.2.18                      │
+│  FastAPI (app/main.py)  version 0.2.19                      │
 │  /api/*  ·  /mcp/  (Streamable HTTP, FastMCP)               │
 ├──────────────┬──────────────────────┬───────────────────────┤
 │  SQLite      │  zvec (per entity)   │  LM Studio :1234      │
@@ -285,7 +285,7 @@ Dump **богаче** report по `props_json` (полные XML-Properties); п
 |---|---|
 | `list_contexts` | Enabled + **ready** контексты с tags |
 | `list_context_groups` | Теги для `context=tag:…` в search |
-| `search_metadata` | FTS; prefix-expand длинных токенов; SQL LIKE fallback; ranking (kind/coverage/diversity при `tag:`; интенты, домены, Help). **`literal=true`**: mid-string SQL (name/path/synonym; comment при `path_prefix` или длинном query), без FTS |
+| `search_metadata` | FTS; prefix-expand длинных токенов; SQL LIKE fallback; ranking (kind/coverage/diversity при `tag:`; интенты, домены, Help). **`literal=true`**: mid-string SQL (name/path/synonym; без comment); корень коллекции как `path_prefix` → `path_prefix_too_broad`. Prefix-lane `Stem%` (stem≥5) под path-index, затем mid. `kind=Report` без prefix → `search_by_stem_roots` (`literal_lane=report_stem`), не полный mid по `Отчеты.` |
 | `find_by_guid` | UUID → path/kind (`objects.guid` после reparse; иначе ConfigDumpInfo.xml на диске). Только dump |
 | `search_under` | FTS в поддереве `parent_path` (после нахождения корня документа/справочника) |
 | `semantic_search` | Hybrid zvec + FTS (RRF) + тот же ranking; `path_prefix`, `compact` |

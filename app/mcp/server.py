@@ -47,11 +47,13 @@ mcp = FastMCP(
         "Search tips:\n"
         "- Exact names / short identifiers → search_metadata (FTS) first; semantic_search only "
         "if FTS is empty or weak.\n"
-        "- literal=true is mid-string SQL: use it ONLY with path_prefix / parent_path, and ONLY "
+        "- literal=true is mid-string SQL: use it ONLY with a concrete object "
+        "path_prefix / parent_path (not a collection root like Документы / "
+        "ОбщиеМодули / Обработки — refused as too_broad), and ONLY "
         "for a single identifier (no spaces). Never literal=true on a natural-language phrase "
         "or error message — that is a full-table scan on large dumps and is refused/skipped.\n"
         "- After FTS miss on an exact identifier: retry search_metadata / find_methods WITHOUT "
-        "literal (exact/prefix), or literal=true WITH path_prefix/parent_path.\n"
+        "literal (exact/prefix), or literal=true WITH a concrete object path_prefix/parent_path.\n"
         "- Error / message text in BSL → find_code_references(identifier, parent_path=module "
         "or object from a prior hit, e.g. ОбщиеМодули.ИмяМодуля). "
         "Never use a collection root alone (Обработки, ОбщиеМодули, Документы) — refused. "
@@ -277,8 +279,9 @@ def search_metadata(
         Field(
             description=(
                 "Indexed name/path equality when unscoped; mid-string SQL only with "
-                "path_prefix. Single identifier, not a phrase. After FTS miss prefer "
-                "path_prefix / search_under rather than unscoped literal."
+                "a concrete object path_prefix (collection roots → path_prefix_too_broad). "
+                "Single identifier, not a phrase. After FTS miss prefer "
+                "object path_prefix / search_under rather than unscoped literal."
             )
         ),
     ] = False,
@@ -289,6 +292,7 @@ def search_metadata(
     context from list_contexts with the same query. tag:… only when searching a tag group.
     Prefer path_prefix / search_under after you know the parent object.
     literal=true without path_prefix is indexed equality only (no full-table LIKE).
+    Collection-root path_prefix (Документы, Отчеты, …) → path_prefix_too_broad.
     """
 
     def _run():

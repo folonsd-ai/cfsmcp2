@@ -759,6 +759,11 @@ _STEM_PREFIX_KIND: dict[str, tuple[str, ...]] = {
 }
 
 
+# Minimum stem length for leading-prefix recall lanes (U41 / P4).
+# Gates prefix-lane only — not whether mid-LIKE is allowed under a narrow object.
+NAME_PREFIX_MIN_STEM = 5
+
+
 def search_by_name_prefixes(
     conn: sqlite3.Connection,
     entity_id: int,
@@ -778,7 +783,7 @@ def search_by_name_prefixes(
     uniq = [
         p.strip()
         for p in dict.fromkeys(prefixes)
-        if (p or "").strip() and len(p.strip()) >= 5
+        if (p or "").strip() and len(p.strip()) >= NAME_PREFIX_MIN_STEM
     ]
     if not uniq:
         return []
@@ -882,7 +887,7 @@ def search_by_stem_roots(
         }
 
     # U41 lexical-first: name prefix via collection tree (no mid-string tax).
-    if not report_tree and len(stem) >= 5:
+    if not report_tree and len(stem) >= NAME_PREFIX_MIN_STEM:
         prefixed = search_by_name_prefixes(
             conn,
             entity_id,
@@ -1638,6 +1643,38 @@ def _literal_like_forms(query: str) -> list[str]:
     return out
 
 
+def _literal_prefix_like_forms(query: str) -> list[str]:
+    """Leading-anchor ``Stem%`` forms for prefix-lane (P3); same case set as mid."""
+    q = (query or "").strip()
+    if not q or any(c.isspace() for c in q):
+        return []
+    forms = {q, q.casefold(), q.lower(), q.upper()}
+    if len(q) > 1:
+        forms.add(q[0].upper() + q[1:])
+        forms.add(q[0].upper() + q[1:].casefold())
+    out: list[str] = []
+    for f in forms:
+        if not f:
+            continue
+        esc = f.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        out.append(f"{esc}%")
+    return out
+
+
+def _rows_to_literal_hits(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": r["path"],
+            "kind": r["kind"],
+            "belong": r["belong"],
+            "name": r["name"],
+            "synonym": r["synonym"],
+            "comment": r["comment"] or "",
+            "score": 1.0,
+        }
+        for r in rows
+    ]
+
 def find_by_guid(
     conn: sqlite3.Connection,
     entity_id: int,
@@ -1696,8 +1733,14 @@ def search_literal(
     ``name=`` / ``path=``. Phrases return empty (caller should hint
     ``path_prefix`` / ``semantic_search``).
 
-    With ``path_prefix``: path-range + LIKE on name/path/synonym; comment
-    only inside that subtree. Help / props_json are never scanned.
+    With ``path_prefix``: path-range (``INDEXED BY idx_objects_path``) then
+    P3 prefix-lane (``name/synonym/path LIKE 'Stem%'``, stem ≥
+    ``NAME_PREFIX_MIN_STEM``) and mid ``%Stem%`` fallback on name/path/synonym.
+    Comment is never in LIKE — HTML/long comments dominate I/O.
+
+    Collection-root prefixes (``Документы``, …) must be refused by the
+    service layer (``path_prefix_too_broad``); this function still accepts
+    any prefix string for low-level callers.
     """
     q = (query or "").strip()
     if len(q) < 2:
@@ -1785,45 +1828,60 @@ def search_literal(
                     break
         return out
 
+    where = ["entity_id=?"]
+    params: list[Any] = [entity_id]
+    _kind_sql(where, params)
+    # Include the prefix object itself, not only descendants.
+    where.append("(path = ? OR path BETWEEN ? AND ?)")
+    lo, hi = path_range_params(pref + ".")
+    params.extend([pref, lo, hi])
+    scope_sql = " AND ".join(where)
+
+    def _scoped_field_query(field_ors: list[str], like_params: list[Any]) -> list[dict[str, Any]]:
+        # U41: always force path index — never idx_objects_name with name LIKE.
+        sql = f"""
+            SELECT path, kind, belong, name, synonym, comment
+            FROM objects INDEXED BY idx_objects_path
+            WHERE {scope_sql}
+              AND ({" OR ".join(field_ors)})
+            LIMIT ?
+        """
+        rows = conn.execute(sql, [*params, *like_params, lim]).fetchall()
+        return _rows_to_literal_hits(rows)
+
+    # P3/P4: prefix-lane (Stem%) only when stem is long enough; mid always allowed
+    # under object scope (short stems included).
+    prefix_likes = (
+        _literal_prefix_like_forms(q)
+        if len(q) >= NAME_PREFIX_MIN_STEM and not any(c.isspace() for c in q)
+        else []
+    )
+    if prefix_likes:
+        field_ors: list[str] = []
+        like_params: list[Any] = []
+        for like in prefix_likes:
+            field_ors.append(
+                "(name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' "
+                "OR synonym LIKE ? ESCAPE '\\')"
+            )
+            like_params.extend([like, like, like])
+        prefixed = _scoped_field_query(field_ors, like_params)
+        if prefixed:
+            return prefixed
+
     likes = _literal_like_forms(q)
     if not likes:
         return []
-
-    where = ["entity_id=?"]
-    params = [entity_id]
-    _kind_sql(where, params)
-    where.append("path BETWEEN ? AND ?")
-    params.extend(path_range_params(pref + "."))
-
-    field_ors: list[str] = []
+    field_ors = []
+    like_params = []
     for like in likes:
+        # No comment LIKE (P2): comment blobs dominate I/O under large trees.
         field_ors.append(
             "(name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' "
-            "OR synonym LIKE ? ESCAPE '\\' OR comment LIKE ? ESCAPE '\\')"
+            "OR synonym LIKE ? ESCAPE '\\')"
         )
-        params.extend([like, like, like, like])
-
-    sql = f"""
-        SELECT path, kind, belong, name, synonym, comment
-        FROM objects INDEXED BY idx_objects_path
-        WHERE {" AND ".join(where)}
-          AND ({" OR ".join(field_ors)})
-        LIMIT ?
-    """
-    params.append(lim)
-    rows = conn.execute(sql, params).fetchall()
-    return [
-        {
-            "path": r["path"],
-            "kind": r["kind"],
-            "belong": r["belong"],
-            "name": r["name"],
-            "synonym": r["synonym"],
-            "comment": r["comment"] or "",
-            "score": 1.0,
-        }
-        for r in rows
-    ]
+        like_params.extend([like, like, like])
+    return _scoped_field_query(field_ors, like_params)
 
 
 def search_managed_forms(
