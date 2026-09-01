@@ -1,6 +1,6 @@
 [project]
 name = "cfsmcp2"
-version = "0.2.20"
+version = "0.2.21"
 description = "MCP server and UI for 1C metadata and BSL search"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
