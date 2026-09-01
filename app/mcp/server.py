@@ -56,7 +56,8 @@ mcp = FastMCP(
         "literal (exact/prefix), or literal=true WITH a concrete object path_prefix/parent_path.\n"
         "- Error / message text in BSL → find_code_references(identifier, parent_path=module "
         "or object from a prior hit, e.g. ОбщиеМодули.ИмяМодуля). "
-        "Never use a collection root alone (Обработки, ОбщиеМодули, Документы) — refused. "
+        "Never use a collection root alone (Обработки, ОбщиеМодули, Документы) as parent_path "
+        "in find_methods / list_methods / find_code_references — refused (parent_too_broad). "
         "Unscoped find_code_references on a large dump is refused.\n"
         "- get_method sets index_stale when the dump file is newer than the last index; "
         "body then comes from disk. get_indexing_status may set index_stale on dump entities "
@@ -923,7 +924,8 @@ def list_methods(
         Field(
             description=(
                 "Optional module/object path from a previous hit "
-                "(e.g. ОбщиеМодули.ИмяМодуля). Do not invent a path."
+                "(e.g. ОбщиеМодули.ИмяМодуля). Not a collection root — "
+                "ОбщиеМодули alone → parent_too_broad."
             )
         ),
     ] = None,
@@ -978,8 +980,8 @@ def find_methods(
         Field(
             description=(
                 "Optional module/object path already seen in a hit. "
-                "Do not invent a path. If the response has parent_not_found, "
-                "call search_metadata — do not retry find_methods with another guess."
+                "Do not invent a path. Not a collection root (ОбщиеМодули, Документы, …) — "
+                "use search_metadata first. If parent_not_found, call search_metadata."
             )
         ),
     ] = None,

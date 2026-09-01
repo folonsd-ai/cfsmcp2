@@ -11,6 +11,47 @@
 
 Репозиторий: https://github.com/folonsd-ai/cfsmcp2 · архитектура: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+## Skill для агента (использование MCP)
+
+Каталог в репозитории: `.cursor/skills/cfsmcp2/` (`SKILL.md`, `reference.md`).
+
+Skill учит агента **как вызывать** MCP tools (scoping, маршруты, anti-patterns).
+**Skill ≠ MCP-сервер** — для tools нужен ещё поднятый cfsmcp2 по [AGENT-INSTALL.md](AGENT-INSTALL.md).
+
+### Куда ставить
+
+| Вариант | Путь |
+|---------|------|
+| Только в одном проекте | `<ваш-проект>/.cursor/skills/cfsmcp2/` |
+| Во всех проектах (Linux/macOS) | `~/.cursor/skills/cfsmcp2/` |
+| Во всех проектах (Windows) | `%USERPROFILE%\.cursor\skills\cfsmcp2\` |
+
+Не использовать `~/.cursor/skills-cursor/` — служебный каталог Cursor.
+
+### Через агента (проще всего)
+
+Откройте **целевой** проект в Cursor:
+
+> Установи skill cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2`
+
+Skill + сервер одной командой:
+
+> Установи skill cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` и подними MCP по `AGENT-INSTALL.md`
+
+Если репозиторий cfsmcp2 уже открыт — skill на месте, копировать не нужно.
+
+### Вручную (Windows PowerShell, skill в текущий проект)
+
+```powershell
+git clone --depth 1 https://github.com/folonsd-ai/cfsmcp2.git $env:TEMP\cfsmcp2
+New-Item -ItemType Directory -Force -Path ".\.cursor\skills" | Out-Null
+Copy-Item -Recurse -Force "$env:TEMP\cfsmcp2\.cursor\skills\cfsmcp2" ".\.cursor\skills\cfsmcp2"
+```
+
+Linux / macOS — см. `.cursor/skills/cfsmcp2/SKILL.md` § «Установить skill».
+
+Подробности и обновление: [.cursor/skills/cfsmcp2/SKILL.md](.cursor/skills/cfsmcp2/SKILL.md).
+
 ## Как попросить агента поставить cfsmcp2
 
 Установка — протокол, который выполняет сам ИИ-агент. Откройте проект в Cursor и отправьте:

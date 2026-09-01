@@ -3548,6 +3548,24 @@ def list_methods(
     try:
         entity = resolve_context(context, conn)
         _require_bsl(entity, context)
+        parent_f = (parent_path or "").strip().rstrip(".") or None
+        if parent_f and _body_search_parent_too_broad(parent_f):
+            return {
+                "context": entity["name"],
+                "parent_path": parent_f,
+                "query": q,
+                "export_only": export_only,
+                "parent_too_broad": True,
+                "total": 0,
+                "methods": [],
+                "hint": (
+                    f"parent_path={parent_f!r} is a metadata collection root — "
+                    "listing methods would scan thousands of modules. "
+                    "Use list_code_modules(q=…) or search_metadata, then retry with "
+                    "parent_path like ОбщиеМодули.ИмяМодуля."
+                ),
+                "next_tool": "list_code_modules",
+            }
         items = method_repo.list_methods(
             conn,
             int(entity["id"]),
@@ -3712,6 +3730,37 @@ def find_methods(
         _require_bsl(entity, context)
         timer.lap("resolve")
         parent_f = (parent_path or "").strip().rstrip(".") or None
+
+        if _body_search_parent_too_broad(parent_f):
+            out = {
+                "context": entity["name"],
+                "query": query,
+                "parent_path": parent_f,
+                "parent_too_broad": True,
+                "match_mode": "literal" if literal else "exact",
+                "total": 0,
+                "methods": [],
+                "hint": (
+                    f"parent_path={parent_f!r} is a metadata collection root — "
+                    "method search would scan thousands of modules. "
+                    "Locate a concrete module first (search_metadata / list_code_modules "
+                    "with q), then retry with parent_path like ОбщиеМодули.ИмяМодуля."
+                ),
+                "next_tool": "search_metadata",
+            }
+            attach_timing(
+                out,
+                timer,
+                scale={
+                    "objects": int(entity.get("object_count") or 0),
+                    "methods": int(entity.get("bsl_method_count") or 0),
+                    "limit": limit,
+                    "exact_hits": 0,
+                    "match_mode": out["match_mode"],
+                },
+            )
+            return out
+
         if parent_f and not obj_repo.path_or_children_exist(
             conn, int(entity["id"]), parent_f
         ):

@@ -313,8 +313,8 @@ Dump **богаче** report по `props_json` (полные XML-Properties); п
 | Tool | Назначение |
 |---|---|
 | `list_code_modules` | Модули с `methods_count`; **обязателен `q`** (≥2 символа; полный список не отдаётся) |
-| `list_methods` | Список методов, фильтры |
-| `find_methods` | Exact/prefix → при &lt;3 hits **fuzzy** (zvec RRF); **`literal=true`**: mid-string name/path/signature, без fuzzy |
+| `list_methods` | Список методов, фильтры; корень коллекции как `parent_path` → `parent_too_broad` |
+| `find_methods` | Exact/prefix → при &lt;3 hits **fuzzy** (zvec RRF); **`literal=true`**: mid-string name/path/signature, без fuzzy. Корень коллекции как `parent_path` → `parent_too_broad` |
 | `get_method` | Метод; `body` из индекса (`full`) или с диска; при файле новее stamp — `index_stale=true`, body с диска |
 | `get_module_structure` | Методы, `#Область`, экспорты, номера строк |
 | `find_code_references` | Подстрока в телах: индекс при `full`, иначе grep `.bsl`; arg **`identifier`**; **`literal=true`** предпочитает диск |

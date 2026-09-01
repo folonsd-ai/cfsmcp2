@@ -265,7 +265,10 @@ TOOLS_RU: dict[str, dict] = {
         ),
         "parameters": {
             "context": _CTX_SINGLE,
-            "parent_path": "Путь модуля/объекта из предыдущего хита (напр. ОбщиеМодули.ИмяМодуля). Не угадывать.",
+            "parent_path": (
+                "Путь модуля из хита (ОбщиеМодули.Имя). "
+                "Не корень коллекции — parent_too_broad."
+            ),
             "q": "Подстрочный фильтр по имени/сигнатуре/доке/пути",
             "export_only": "Только экспортные методы",
             "limit": "Макс. строк (<=200)",
@@ -276,7 +279,8 @@ TOOLS_RU: dict[str, dict] = {
         "description": (
             "Поиск методов: сначала точная подстрока; если <3 хитов — "
             "семантический (нечёткий) поиск. "
-            "parent_path — только путь из хита; при parent_not_found — search_metadata, "
+            "parent_path — только путь из хита; корень коллекции (ОбщиеМодули, Документы) → "
+            "parent_too_broad; при parent_not_found — search_metadata, "
             "не повтор find_methods с другим угаданным путём. "
             "Термины из имени метода перевешивают совпадения только в параметрах/сигнатуре — "
             "при «глаголе» в имени сужайте parent_path. "
@@ -285,7 +289,10 @@ TOOLS_RU: dict[str, dict] = {
         "parameters": {
             "context": _CTX_SINGLE,
             "query": "Имя метода / сигнатура / намерение",
-            "parent_path": "Путь модуля/объекта из предыдущего хита. Не угадывать. При parent_not_found — search_metadata.",
+            "parent_path": (
+                "Путь модуля/объекта из хита (ОбщиеМодули.Имя). "
+                "Не корень коллекции — parent_too_broad."
+            ),
             "export_only": "Только экспортные методы",
             "limit": "Макс. строк (<=200)",
             "literal": "Mid-string name/path/signature только с parent_path; без него — exact/prefix. Не фраза.",

@@ -55,8 +55,12 @@ docs/
 # Infostart publication drafts (local)
 /infostart/
 
-# IDE / OS
-.cursor/
+# IDE / OS — track cfsmcp2 skill only; ignore other .cursor local state
+.cursor/*
+!.cursor/skills/
+.cursor/skills/*
+!.cursor/skills/cfsmcp2/
+!.cursor/skills/cfsmcp2/**
 .idea/
 .vscode/
 .DS_Store

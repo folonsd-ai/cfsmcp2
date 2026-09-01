@@ -10,6 +10,23 @@
 
 Порт **8559**, MCP-имя **`cfsmcp2`**.
 
+## Skill (правила использования tools)
+
+**AGENT-INSTALL** поднимает MCP-сервер. **Skill** учит агента вызывать tools
+(без fan-out, маршруты, anti-patterns). Это разные шаги.
+
+| Что | Где | Когда |
+|-----|-----|-------|
+| Skill | `.cursor/skills/cfsmcp2/` в репо | Копировать в `<workspace>/.cursor/skills/cfsmcp2/` или `~/.cursor/skills/cfsmcp2/` |
+| MCP-сервер | Docker/native по этому файлу | Health `:8559`, контексты `ready` в UI |
+
+Если пользователь просит **«установи skill»** (без сервера) — см.
+`.cursor/skills/cfsmcp2/SKILL.md` § «Установить skill». Не путай с `skills-cursor/`.
+
+Если workspace **не** клон cfsmcp2 — для skill достаточно скопировать папку
+`.cursor/skills/cfsmcp2/` из клона; полный репозиторий на диске нужен только
+для поднятия сервера.
+
 ## 0. Где работать
 
 1. Если текущий workspace — уже клон `cfsmcp2` (есть `docker-compose.yml`, `app/`, этот файл) — работай **в корне этого репозитория**.
