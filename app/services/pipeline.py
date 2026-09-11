@@ -1030,11 +1030,11 @@ def iter_clone_entity(source_id: int, new_name: str) -> Iterator[dict[str, Any]]
             INSERT INTO entities(
               name, name_locked, synonym, comment, entity_type, version, file_path,
               source_mode, source_location, source_path, ingest_profile, dumps_dir, zip_path,
-              enabled, bsl_enabled, bsl_load_mode, bsl_embed_mode, model, status,
+              enabled, bsl_enabled, bsl_load_mode, bsl_embed_mode, embed_window_preset, model, status,
               object_count, link_count, indexed_count, index_target, index_started_at,
               parse_gen, parse_added, parse_changed, parse_deleted, parse_unchanged,
               bsl_method_count, error_message
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ready',?,?,?,?,0,?,?,?,?,?,?, '')
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ready',?,?,?,?,0,?,?,?,?,?,?, '')
             """,
             (
                 name,
@@ -1055,6 +1055,7 @@ def iter_clone_entity(source_id: int, new_name: str) -> Iterator[dict[str, Any]]
                 int(src["bsl_enabled"]) if src.get("bsl_enabled") is not None else 1,
                 str(src.get("bsl_load_mode") or ""),
                 str(src.get("bsl_embed_mode") or ""),
+                str(src.get("embed_window_preset") or ""),
                 model,
                 int(src.get("object_count") or 0),
                 int(src.get("link_count") or 0),
@@ -1310,6 +1311,30 @@ def _bsl_load_mode_from_profile(profile: dict, entity: dict) -> str:
         if raw:
             return normalize_bsl_load_mode(raw)
     return "signatures"
+
+
+def _sync_entity_embed_settings(conn, entity_id: int, entity: dict, profile: dict) -> None:
+    """Persist bsl_embed_mode + embed_window_preset from ingest profile / entity row."""
+    from app.services.bsl_embed import (
+        embed_settings_from_profile,
+        normalize_bsl_embed_mode,
+        normalize_embed_window_preset,
+    )
+
+    mode = normalize_bsl_embed_mode(str(entity.get("bsl_embed_mode") or ""))
+    preset = normalize_embed_window_preset(entity.get("embed_window_preset"))
+    if not mode or not preset:
+        prof_mode, prof_preset = embed_settings_from_profile(profile)
+        if not mode:
+            mode = prof_mode
+        if not preset:
+            preset = prof_preset
+    ent_repo.set_entity_embed_config(
+        conn,
+        entity_id,
+        bsl_embed_mode=mode,
+        embed_window_preset=preset or "",
+    )
 
 
 def _report_file_unchanged(conn, entity_id: int, path: Path) -> bool:
@@ -1704,9 +1729,8 @@ def _parse_dump_entity(entity_id: int) -> None:
             )
             skip_reindex = _unchanged_skip_reindex(prev_status, 0, 0, 0)
             bsl_method_count = int(entity.get("bsl_method_count") or 0)
-            bsl_load_mode = _bsl_load_mode_from_profile(
-                ent_repo.ingest_profile_of(entity), entity
-            )
+            profile = ent_repo.ingest_profile_of(entity)
+            bsl_load_mode = _bsl_load_mode_from_profile(profile, entity)
             ent_repo.set_status(
                 conn,
                 entity_id,
@@ -1723,6 +1747,7 @@ def _parse_dump_entity(entity_id: int) -> None:
                 indexed_count=total_stored if skip_reindex else 0,
                 index_target=total_stored if skip_reindex else 0,
             )
+            _sync_entity_embed_settings(conn, entity_id, entity, profile)
             conn.commit()
             log.info(
                 "dump parsed entity %s objects=%s links=%s +0 ~0 -0 =%s "
@@ -2094,6 +2119,7 @@ def _parse_dump_entity(entity_id: int) -> None:
                 indexed_count=total_stored if skip_reindex else 0,
                 index_target=total_stored if skip_reindex else 0,
             )
+            _sync_entity_embed_settings(conn, entity_id, entity, profile)
             conn.commit()
             log.info(
                 "dump parsed entity %s objects=%s links=%s +%s ~%s -%s =%s excluded=%s "
@@ -2379,14 +2405,16 @@ def _embed_chunk(
     model: str,
     base_url: str | None,
     mode: str,
+    limits: dict[str, int],
 ) -> tuple[list[dict], list[dict], list[list[float]]]:
     """Embed one batch in a worker thread (own EmbeddingClient)."""
     from app.services.bsl_embed import passages_for_object
 
     objs = [dict(r) for r in chunk_rows]
     passages: list[dict] = []
+    lim = dict(limits or {})
     for o in objs:
-        for doc_id, text in passages_for_object(o, mode):
+        for doc_id, text in passages_for_object(o, mode, limits=lim):
             passages.append({"obj": o, "doc_id": doc_id, "text": text})
     if not passages:
         return objs, [], []
@@ -2408,7 +2436,7 @@ def _embed_pending_into(
 
     Returns ``(indexed_objects, embed_sec, upsert_sec, stale_delete_sec, wave_flush_sec)``.
     """
-    from app.services.bsl_embed import get_bsl_embed_limits, zvec_stale_chunk_ids
+    from app.services.bsl_embed import get_entity_bsl_embed_limits, zvec_stale_chunk_ids
 
     indexed_wrote = 0
     embed_sec = 0.0
@@ -2422,13 +2450,14 @@ def _embed_pending_into(
     entity_row = ent_repo.get_entity(conn, entity_id)
     ctx_name = str((entity_row or {}).get("name") or entity_id)
     if entity_row:
-        from app.services.bsl_embed import normalize_bsl_embed_mode
+        from app.services.bsl_embed import ALLOWED_BSL_EMBED_MODES
 
-        mode = normalize_bsl_embed_mode(
-            str(entity_row.get("bsl_embed_mode") or "") or mode
-        )
+        raw_mode = str(entity_row.get("bsl_embed_mode") or "").strip().lower()
+        if raw_mode in ALLOWED_BSL_EMBED_MODES:
+            mode = raw_mode
+    embed_limits = get_entity_bsl_embed_limits(entity_row)
     base_url = client.base_url
-    max_chunks = int(get_bsl_embed_limits().get("max_chunks") or 12)
+    max_chunks = int(embed_limits.get("max_chunks") or 12)
     bsl_embed_gen = int((entity_row or {}).get("bsl_embed_gen") or 0)
     scope = str((entity_row or {}).get("index_scope") or "")
     already, _ = obj_repo.count_embed_progress(conn, entity_id, scope=scope)
@@ -2471,7 +2500,7 @@ def _embed_pending_into(
             return [], 0.0, None
         chunks = [rows[i : i + batch_size] for i in range(0, len(rows), batch_size)]
         t0 = time.perf_counter()
-        futs = [pool.submit(_embed_chunk, c, model, base_url, mode) for c in chunks]
+        futs = [pool.submit(_embed_chunk, c, model, base_url, mode, embed_limits) for c in chunks]
 
         class _Wait:
             def result(self):

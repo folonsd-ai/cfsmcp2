@@ -211,8 +211,9 @@ def list_contexts() -> list[dict]:
     If they already named one (e.g. РасширениеКонтурЛогистика) — skip this tool
     and search that name directly; do not iterate all returned contexts.
 
-    Each item includes ``profile``: {bsl, help, lean, …}. When lean=true or
-    bsl=false — metadata-only (no find_methods / trace_call_chain).
+    Each item includes ``profile``: {bsl, help, lean, bsl_embed_mode,
+    embed_window_preset, embed_window_tokens, …}. When lean=true or bsl=false —
+    metadata-only (no find_methods / trace_call_chain).
     """
 
     def _run():

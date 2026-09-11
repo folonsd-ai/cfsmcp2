@@ -464,6 +464,8 @@
   .adv-preset-btn{border:1px solid var(--color-border-soft); background:var(--color-card); color:var(--color-muted-foreground); font:600 14px var(--font-mono); padding:8px 16px; border-radius:8px; cursor:pointer}
   .adv-preset-btn:hover{border-color:var(--accent-line); color:var(--color-foreground)}
   .adv-preset-btn.active{border-color:var(--color-accent); background:var(--accent-dim); color:var(--color-accent)}
+  .adv-preset-btn.suggested{border-color:var(--color-accent); border-style:dashed; color:var(--color-accent)}
+  .adv-presets-suggest{margin:6px 0 0; font-size:13px; color:var(--color-accent); line-height:1.35}
   .adv-row{display:grid; grid-template-columns:1fr auto; gap:20px; align-items:center; padding:14px 2px; border-bottom:1px solid var(--color-border-soft)}
   .adv-row:last-of-type{border-bottom:0}
   .adv-name{font:600 16px var(--font-sans); color:var(--color-foreground)}

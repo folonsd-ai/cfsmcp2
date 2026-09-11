@@ -30,6 +30,18 @@ MAX_CHUNKS_MIN, MAX_CHUNKS_HARD = 1, 32
 # ~2.7–2.9 chars/token for RU/BSL, ~8–10% headroom for meta/special tokens).
 BSL_EMBED_WINDOW_PRESETS: list[dict[str, Any]] = [
     {
+        "id": "256",
+        "tokens": 256,
+        "models_hint": "text-embedding-user2-1c",
+        "limits": {
+            "passage_max_chars": 680,
+            "chunk_size": 540,
+            "chunk_overlap": 70,
+            "min_body_chars": 120,
+            "max_chunks": 14,
+        },
+    },
+    {
         "id": "512",
         "tokens": 512,
         "models_hint": "e5-small / e5-base / multilingual-e5-small",
@@ -130,6 +142,72 @@ def bsl_embed_limits_bounds() -> dict[str, dict[str, int]]:
             "default": DEFAULT_MAX_CHUNKS,
         },
     }
+
+
+def known_embed_window_preset_ids() -> frozenset[str]:
+    return frozenset(str(p["id"]) for p in BSL_EMBED_WINDOW_PRESETS)
+
+
+def normalize_embed_window_preset(raw: str | None) -> str | None:
+    s = str(raw or "").strip()
+    if s in known_embed_window_preset_ids():
+        return s
+    return None
+
+
+def limits_for_embed_window_preset(preset_id: str | None) -> dict[str, int] | None:
+    pid = normalize_embed_window_preset(preset_id)
+    if not pid:
+        return None
+    for preset in BSL_EMBED_WINDOW_PRESETS:
+        if str(preset["id"]) == pid:
+            return normalize_bsl_embed_limits(base=dict(preset["limits"]))
+    return None
+
+
+def preset_id_matching_limits(lim: dict[str, int]) -> str | None:
+    cur = normalize_bsl_embed_limits(base=lim)
+    keys = ("passage_max_chars", "chunk_size", "chunk_overlap", "min_body_chars", "max_chunks")
+    for preset in BSL_EMBED_WINDOW_PRESETS:
+        plim = normalize_bsl_embed_limits(base=dict(preset["limits"]))
+        if all(cur[k] == plim[k] for k in keys):
+            return str(preset["id"])
+    return None
+
+
+def default_embed_window_preset_id() -> str:
+    match = preset_id_matching_limits(get_bsl_embed_limits())
+    return match or "512"
+
+
+def embed_window_preset_tokens(preset_id: str | None) -> int | None:
+    pid = normalize_embed_window_preset(preset_id)
+    if not pid:
+        return None
+    for preset in BSL_EMBED_WINDOW_PRESETS:
+        if str(preset["id"]) == pid:
+            return int(preset["tokens"])
+    return None
+
+
+def embed_settings_from_profile(profile: dict | None) -> tuple[str, str]:
+    """Resolve (bsl_embed_mode, embed_window_preset id) for a new entity."""
+    p = profile or {}
+    mode = normalize_bsl_embed_mode(str(p.get("bsl_embed_mode") or ""))
+    preset = normalize_embed_window_preset(p.get("embed_window_preset"))
+    if not preset:
+        preset = default_embed_window_preset_id()
+    return mode, preset
+
+
+def get_entity_bsl_embed_limits(entity: dict | None) -> dict[str, int]:
+    """Per-context limits: entity preset, else global app_settings."""
+    stored = normalize_embed_window_preset((entity or {}).get("embed_window_preset"))
+    if stored:
+        lim = limits_for_embed_window_preset(stored)
+        if lim:
+            return lim
+    return get_bsl_embed_limits()
 
 
 def bsl_embed_window_presets() -> list[dict[str, Any]]:

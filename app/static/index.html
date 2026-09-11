@@ -699,7 +699,13 @@
     .adv-preset-btn.active {
       border-color:var(--accent); background:var(--accent-soft); color:var(--accent);
     }
+    .adv-preset-btn.suggested {
+      border-color:var(--accent); border-style:dashed; color:var(--accent);
+    }
     .adv-preset-btn .tok { font-variant-numeric:tabular-nums; }
+    .adv-presets-suggest {
+      margin:6px 0 0; font-size:11px; color:var(--accent); line-height:1.35;
+    }
     .adv-limits {
       display:flex; flex-direction:column; gap:0; margin:0 0 12px;
       border:1px solid var(--border); border-radius:10px; overflow:hidden;
@@ -1369,7 +1375,7 @@
       margin: 6px 2px; background: transparent;
     }
   </style>
-  <link rel="stylesheet" href="/static/ide-console.css?v=28" />
+  <link rel="stylesheet" href="/static/ide-console.css?v=29" />
 </head>
 <body>
   <div class="topbar">
@@ -1832,6 +1838,7 @@
           <div class="adv-presets-title adv-hint-title" data-i18n="lm.advPresetsTitle">Рекомендации по окну модели</div>
           <p class="adv-presets-hint adv-hint-desc" data-i18n="lm.advPresetsHint">Подставьте набор под max sequence length embedding-модели. Значения — оценка в символах (~2.8 на токен для RU/BSL); после выбора нажмите «Сохранить».</p>
           <div class="adv-preset-row" id="bslEmbedPresetRow" role="group" aria-label="Пресеты окна модели"></div>
+          <p id="bslEmbedPresetSuggest" class="adv-presets-suggest" hidden></p>
         </div>
         <div class="adv-limits" id="bslEmbedLimitsFields">
           <div class="adv-item">
@@ -2282,6 +2289,11 @@
                     </span>
                   </label>
                 </div>
+                <div class="ingest-window-preset" id="ingestWindowPresetBox">
+                  <div class="section-title mode-title ingest-subtitle" data-i18n="ingest.windowPreset">Окно модели</div>
+                  <p class="ingest-hint bsl-desc" data-i18n="ingest.windowPresetHint">Пресет под ctx embedding-модели. Фиксируется на контексте (как модель).</p>
+                  <div class="adv-preset-row ingest-embed-preset-row" id="ingestEmbedPresetRow" role="group" aria-label="Пресет окна модели"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -2648,7 +2660,41 @@
       p.bsl_load_mode = normalizeBslLoadMode((loadEl && loadEl.value) || 'full');
       p.bsl_embed_mode = (embedEl && embedEl.value) || 'meta';
       if (isSignatureLoadMode(p.bsl_load_mode)) p.bsl_embed_mode = 'meta';
+      p.embed_window_preset = ingestEmbedPresetId || defaultIngestEmbedPresetId();
       return p;
+    }
+    function defaultIngestEmbedPresetId() {
+      const presets = settings.bsl_embed_window_presets || [];
+      const defs = settings.bsl_embed_limits_defaults || {};
+      const keys = ['passage_max_chars', 'chunk_size', 'chunk_overlap', 'min_body_chars', 'max_chunks'];
+      for (const p of presets) {
+        const lim = p && p.limits;
+        if (lim && keys.every((k) => Number(lim[k]) === Number(defs[k]))) return String(p.id);
+      }
+      return '512';
+    }
+    function renderIngestEmbedPresets() {
+      const row = document.getElementById('ingestEmbedPresetRow');
+      if (!row) return;
+      const presets = settings.bsl_embed_window_presets || [];
+      if (!ingestEmbedPresetId) ingestEmbedPresetId = defaultIngestEmbedPresetId();
+      row.innerHTML = presets.map((p) => {
+        const hint = escapeAttr(p.models_hint || '');
+        const title = hint || ('~' + p.tokens + ' tokens');
+        return `<button type="button" class="adv-preset-btn" data-preset="${escapeAttr(p.id)}" title="${title}"><span class="tok">≈${p.tokens}</span></button>`;
+      }).join('');
+      row.querySelectorAll('.adv-preset-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          ingestEmbedPresetId = btn.getAttribute('data-preset') || '';
+          highlightIngestEmbedPreset();
+        });
+      });
+      highlightIngestEmbedPreset();
+    }
+    function highlightIngestEmbedPreset() {
+      document.querySelectorAll('#ingestEmbedPresetRow .adv-preset-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-preset') === ingestEmbedPresetId);
+      });
     }
 
     function syncIngestBslUi() {
@@ -2707,6 +2753,8 @@
       document.querySelectorAll('#ingestBslSection .ingest-bsl-box').forEach((box) => {
         box.classList.toggle('is-disabled', !bslOn);
       });
+      const presetBox = document.getElementById('ingestWindowPresetBox');
+      if (presetBox) presetBox.classList.toggle('is-disabled', !bslOn);
       syncIngestPresetButtons();
     }
 
@@ -3006,6 +3054,8 @@
       const emb = profile.bsl_embed_mode || 'meta';
       const embRadio = document.querySelector('#ingestBslEmbedBox input[value="' + emb + '"]');
       if (embRadio) embRadio.checked = true;
+      ingestEmbedPresetId = String(profile.embed_window_preset || '').trim() || defaultIngestEmbedPresetId();
+      renderIngestEmbedPresets();
       const wantPath = !!opts.defaultPath || opts.sourceLocation === 'path';
       const pathRadio = document.getElementById('ingestDeliveryPath');
       const uploadRadio = document.getElementById('ingestDeliveryUpload');
@@ -4189,6 +4239,8 @@
     let settingsToolsCount = 0;
     let settingsToolsCache = [];
     let settingsToolsLang = '';
+    let lmModelsCache = [];
+    let ingestEmbedPresetId = '';
 
     function setAppSettingsTab(name) {
       appSettingsModal.querySelectorAll('[data-settings-tab]').forEach((btn) => {
@@ -4403,6 +4455,7 @@
       lmModal.querySelectorAll('[data-lm-panel]').forEach((panel) => {
         panel.hidden = panel.getAttribute('data-lm-panel') !== name;
       });
+      if (name === 'advanced') updatePresetSuggestionForSelectedModel();
     }
     function boundLabel(key) {
       const b = (settings.bsl_embed_limits_bounds || {})[key] || {};
@@ -4436,6 +4489,62 @@
         max_chunks: parseInt(document.getElementById('bslMaxChunks').value, 10),
       };
     }
+    function activePresetIdFromForm() {
+      const cur = currentLimitsFromForm();
+      const presets = settings.bsl_embed_window_presets || [];
+      for (const p of presets) {
+        const lim = p && p.limits;
+        if (lim && ['passage_max_chars', 'chunk_size', 'chunk_overlap', 'min_body_chars', 'max_chunks']
+          .every((k) => Number(lim[k]) === Number(cur[k]))) {
+          return p.id;
+        }
+      }
+      return null;
+    }
+    function presetIdForContextLength(ctx) {
+      const presets = settings.bsl_embed_window_presets || [];
+      if (!presets.length || !Number.isFinite(ctx) || ctx <= 0) return null;
+      let best = null;
+      let bestDist = Infinity;
+      for (const p of presets) {
+        const tok = Number(p.tokens);
+        if (!Number.isFinite(tok)) continue;
+        const dist = Math.abs(tok - ctx);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = p.id;
+        }
+      }
+      return best;
+    }
+    function clearPresetSuggestionVisuals() {
+      document.querySelectorAll('#bslEmbedPresetRow .adv-preset-btn.suggested').forEach((btn) => {
+        btn.classList.remove('suggested');
+      });
+      const hintEl = document.getElementById('bslEmbedPresetSuggest');
+      if (hintEl) {
+        hintEl.hidden = true;
+        hintEl.textContent = '';
+      }
+    }
+    function updatePresetSuggestionForSelectedModel() {
+      clearPresetSuggestionVisuals();
+      const modelId = (defaultModelSelect?.value || '').trim();
+      if (!modelId) return;
+      const m = lmModelsCache.find((x) => x && x.id === modelId);
+      const ctx = m && m.max_context_length;
+      if (!Number.isFinite(ctx) || ctx <= 0) return;
+      const presetId = presetIdForContextLength(ctx);
+      if (!presetId || activePresetIdFromForm() === presetId) return;
+      const btn = document.querySelector(`#bslEmbedPresetRow .adv-preset-btn[data-preset="${escapeAttr(presetId)}"]`);
+      if (btn) btn.classList.add('suggested');
+      const p = (settings.bsl_embed_window_presets || []).find((x) => x.id === presetId);
+      const hintEl = document.getElementById('bslEmbedPresetSuggest');
+      if (hintEl && p) {
+        hintEl.hidden = false;
+        hintEl.textContent = t('lm.advPresetSuggest', { ctx, tokens: p.tokens });
+      }
+    }
     function highlightMatchingPreset() {
       const cur = currentLimitsFromForm();
       const presets = settings.bsl_embed_window_presets || [];
@@ -4447,6 +4556,7 @@
           .every((k) => Number(lim[k]) === Number(cur[k]));
         btn.classList.toggle('active', !!on);
       });
+      updatePresetSuggestionForSelectedModel();
     }
     function renderBslEmbedPresets() {
       const row = document.getElementById('bslEmbedPresetRow');
@@ -4827,6 +4937,7 @@
       if (defaultId && !ids.has(defaultId)) {
         list.unshift({ id: defaultId, state: 'saved' });
       }
+      lmModelsCache = list;
       const opts = list.map((m) => {
         const mark = m.state === 'loaded' ? ' [loaded]' : (m.state === 'saved' ? ' [saved]' : '');
         return `<option value="${escapeAttr(m.id)}">${escapeAttr(m.id)}${mark}</option>`;
@@ -4837,6 +4948,7 @@
         el.innerHTML = fallback;
         if (defaultId) el.value = defaultId;
       });
+      updatePresetSuggestionForSelectedModel();
     }
 
     async function loadSettings() {
@@ -7448,6 +7560,10 @@
       btn.addEventListener('click', () => setLmTab(btn.getAttribute('data-lm-tab')));
     });
     document.getElementById('reloadModels').onclick = loadModels;
+    if (defaultModelSelect && defaultModelSelect.dataset.presetSuggestListen !== '1') {
+      defaultModelSelect.dataset.presetSuggestListen = '1';
+      defaultModelSelect.addEventListener('change', updatePresetSuggestionForSelectedModel);
+    }
     document.getElementById('pingLm').onclick = async () => {
       const res = await fetch('/api/settings/models').then(r => r.json());
       await showAlert(

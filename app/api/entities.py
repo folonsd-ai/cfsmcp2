@@ -122,6 +122,7 @@ def _row_to_out(row: dict) -> EntityOut:
         bsl_method_count=int(row.get("bsl_method_count") or 0),
         bsl_load_mode=_effective_bsl_load_mode(row),
         bsl_embed_mode=_effective_bsl_embed_mode(row),
+        embed_window_preset=str(row.get("embed_window_preset") or ""),
         tag_ids=[int(t) for t in (row.get("tag_ids") or [])],
         model=row["model"],
         status=row["status"],
@@ -166,6 +167,8 @@ def _attach_usage(rows: list[dict]) -> None:
 
 def _merged_ingest_profile(raw: str | None) -> dict:
     """Merge user profile JSON onto DEFAULT_INGEST_PROFILE (ТЗ v0.4 §4)."""
+    from app.services.bsl_embed import embed_settings_from_profile
+
     profile = dict(DEFAULT_INGEST_PROFILE)
     if raw:
         try:
@@ -175,6 +178,9 @@ def _merged_ingest_profile(raw: str | None) -> dict:
         if not isinstance(data, dict):
             raise HTTPException(400, "ingest_profile must be a JSON object")
         profile.update(data)
+    mode, preset = embed_settings_from_profile(profile)
+    profile["bsl_embed_mode"] = mode
+    profile["embed_window_preset"] = preset
     return profile
 
 
@@ -392,6 +398,8 @@ async def upload_entity(
                     source_path=original,
                     ingest_profile=profile,
                     comment=comment_override,
+                    bsl_embed_mode=str(profile.get("bsl_embed_mode") or ""),
+                    embed_window_preset=str(profile.get("embed_window_preset") or ""),
                 )
 
             dest = entity_report_path(entity_id_out)
@@ -533,6 +541,8 @@ async def upload_dump_entity(
                     dumps_dir="",
                     zip_path="",
                     comment=comment_override,
+                    bsl_embed_mode=str(profile.get("bsl_embed_mode") or ""),
+                    embed_window_preset=str(profile.get("embed_window_preset") or ""),
                 )
             conn.commit()
         finally:
@@ -730,6 +740,8 @@ def import_path_entity(body: ImportPathRequest) -> EntityOut:
                 dumps_dir=str(resolved) if mode == "dump" else "",
                 zip_path="",
                 comment=comment_override,
+                bsl_embed_mode=str(profile.get("bsl_embed_mode") or ""),
+                embed_window_preset=str(profile.get("embed_window_preset") or ""),
             )
         conn.commit()
         row = ent_repo.get_entity(conn, entity_id_out)
@@ -817,6 +829,42 @@ def patch_entity(entity_id: int, body: EntityPatch) -> EntityOut:
             ent_repo.set_status(
                 conn, entity_id, "parsed", model=body.model, indexed_count=0, index_target=0
             )
+        embed_reindex = False
+        if body.bsl_embed_mode is not None:
+            from app.services.bsl_embed import ALLOWED_BSL_EMBED_MODES, normalize_bsl_embed_mode
+
+            raw = body.bsl_embed_mode.strip().lower()
+            if raw not in ALLOWED_BSL_EMBED_MODES:
+                raise HTTPException(
+                    400,
+                    "bsl_embed_mode must be one of: " + ", ".join(sorted(ALLOWED_BSL_EMBED_MODES)),
+                )
+            new_mode = normalize_bsl_embed_mode(raw)
+            if new_mode != _effective_bsl_embed_mode(row):
+                ent_repo.set_bsl_embed_mode(conn, entity_id, new_mode)
+                embed_reindex = True
+        if body.embed_window_preset is not None:
+            from app.services.bsl_embed import normalize_embed_window_preset
+
+            raw = (body.embed_window_preset or "").strip()
+            if raw and not normalize_embed_window_preset(raw):
+                raise HTTPException(
+                    400,
+                    "embed_window_preset must be one of the known window presets (e.g. 256, 512)",
+                )
+            cur = str(row.get("embed_window_preset") or "").strip()
+            if raw != cur:
+                ent_repo.set_embed_window_preset(conn, entity_id, raw)
+                embed_reindex = True
+        if embed_reindex:
+            from app.repositories import objects as obj_repo
+
+            obj_repo.reset_embed_flags(conn, entity_id)
+            obj_repo.clear_pending_zvec_deletes(conn, entity_id)
+            if row["status"] == "ready":
+                ent_repo.set_status(
+                    conn, entity_id, "parsed", indexed_count=0, index_target=int(row.get("object_count") or 0)
+                )
         if body.comment is not None:
             ent_repo.set_comment(conn, entity_id, body.comment)
         if body.name is not None:

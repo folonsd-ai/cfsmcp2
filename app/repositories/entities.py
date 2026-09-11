@@ -75,6 +75,8 @@ def upsert_entity(
     dumps_dir: str = "",
     zip_path: str = "",
     comment: str | None = None,
+    bsl_embed_mode: str = "",
+    embed_window_preset: str = "",
 ) -> int:
     """Register or refresh entity for a new upload. Keeps existing objects for incremental parse.
 
@@ -145,9 +147,10 @@ def upsert_entity(
         """
         INSERT INTO entities(
           name, synonym, comment, entity_type, version, file_path, model, name_locked, status,
-          source_mode, source_location, source_path, ingest_profile, dumps_dir, zip_path
+          source_mode, source_location, source_path, ingest_profile, dumps_dir, zip_path,
+          bsl_embed_mode, embed_window_preset
         )
-        VALUES (?,?,?,?,?,?,?,?, 'uploaded', ?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?, 'uploaded', ?,?,?,?,?,?,?,?)
         """,
         (
             name,
@@ -164,6 +167,8 @@ def upsert_entity(
             profile_json,
             dumps_dir,
             zip_path,
+            (bsl_embed_mode or "").strip(),
+            (embed_window_preset or "").strip(),
         ),
     )
     return int(cur.lastrowid)
@@ -467,6 +472,30 @@ def set_bsl_embed_mode(conn: sqlite3.Connection, entity_id: int, mode: str) -> N
     )
 
 
+def set_embed_window_preset(conn: sqlite3.Connection, entity_id: int, preset_id: str) -> None:
+    conn.execute(
+        "UPDATE entities SET embed_window_preset=?, updated_at=datetime('now') WHERE id=?",
+        ((preset_id or "").strip(), entity_id),
+    )
+
+
+def set_entity_embed_config(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    *,
+    bsl_embed_mode: str,
+    embed_window_preset: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE entities SET bsl_embed_mode=?, embed_window_preset=?, updated_at=datetime('now')
+        WHERE id=?
+        """,
+        ((bsl_embed_mode or "").strip(), (embed_window_preset or "").strip(), entity_id),
+    )
+    _invalidate_search_cache(conn, entity_id)
+
+
 def delete_entity(conn: sqlite3.Connection, entity_id: int) -> None:
     _invalidate_search_cache(conn, entity_id)
     conn.execute("DELETE FROM entities WHERE id=?", (entity_id,))
@@ -490,7 +519,8 @@ def list_ready_contexts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT e.id, e.name, e.synonym, e.version, e.model, e.object_count,
-          e.source_mode, e.bsl_method_count, e.ingest_profile, e.link_count,
+          e.source_mode, e.bsl_method_count, e.bsl_embed_mode, e.embed_window_preset,
+          e.ingest_profile, e.link_count,
           (
             SELECT GROUP_CONCAT(t.name, char(31))
             FROM entity_tags et
@@ -510,11 +540,33 @@ def list_ready_contexts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         profile = ingest_profile_of(d)
         d.pop("ingest_profile", None)
         flags = ingest_profile_flags(profile)
+        from app.services.bsl_embed import (
+            embed_window_preset_tokens,
+            normalize_bsl_embed_mode,
+            normalize_embed_window_preset,
+        )
+
+        embed_mode = normalize_bsl_embed_mode(
+            str(d.get("bsl_embed_mode") or profile.get("bsl_embed_mode") or "")
+        )
+        embed_preset = (
+            normalize_embed_window_preset(d.get("embed_window_preset"))
+            or normalize_embed_window_preset(profile.get("embed_window_preset"))
+            or ""
+        )
+        flags["bsl_embed_mode"] = embed_mode
+        if embed_preset:
+            flags["embed_window_preset"] = embed_preset
+            tok = embed_window_preset_tokens(embed_preset)
+            if tok is not None:
+                flags["embed_window_tokens"] = tok
         # report = всегда без BSL; lean dump — пресет «только метаданные»
         if str(d.get("source_mode") or "").lower() == "report":
             flags["lean"] = True
             flags["bsl"] = False
             flags["help"] = False
+        d.pop("bsl_embed_mode", None)
+        d.pop("embed_window_preset", None)
         d["profile"] = flags
         d["bsl_method_count"] = int(d.get("bsl_method_count") or 0)
         d["link_count"] = int(d.get("link_count") or 0)

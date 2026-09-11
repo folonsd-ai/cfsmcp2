@@ -53,6 +53,7 @@ DEFAULT_INGEST_PROFILE: dict[str, object] = {
     "exclude_name_substrings": list(_EXCLUDE_DEFAULT),
     "bsl_load_mode": "full",
     "bsl_embed_mode": "chunks",
+    "embed_window_preset": "",
 }
 
 # UI-пресет «Модули»: meta + BSL с calls.
@@ -145,6 +146,7 @@ class EntityOut(BaseModel):
     bsl_method_count: int = 0
     bsl_load_mode: str = ""
     bsl_embed_mode: str = ""
+    embed_window_preset: str = ""
     tag_ids: list[int] = []
     model: str = ""
     status: str
@@ -263,6 +265,8 @@ class EntityPatch(BaseModel):
     bsl_enabled: bool | None = None
     tag_ids: list[int] | None = None
     model: str | None = None
+    embed_window_preset: str | None = None
+    bsl_embed_mode: str | None = None
     comment: str | None = None
     name: str | None = None
     # Только путь (без ingest). Path-режим: также file_path/dumps_dir; upload — bookmark source_path.
