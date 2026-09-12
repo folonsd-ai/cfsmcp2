@@ -36,9 +36,13 @@ ZIP для GitHub Release
 
 Результат: dist\cfsmcp2-win-portable-v<версия>.zip
 
-Перед git push (один раз включить hook)
----------------------------------------
+Перед git push (один раз)
+-------------------------
   powershell -ExecutionPolicy Bypass -File packaging\install-hooks.ps1
+  gh auth login
 
-Перед каждым push автоматически: сборка + ZIP.
-Пропустить один раз: set SKIP_PORTABLE_BUILD=1
+При push в master/main автоматически:
+  1. сборка portable + ZIP (pre-push)
+  2. GitHub Release v<версия> с ZIP (после push, нужен gh auth login)
+
+Пропустить: SKIP_PORTABLE_BUILD=1 и/или SKIP_GITHUB_RELEASE=1

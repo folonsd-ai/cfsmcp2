@@ -5,5 +5,6 @@ Set-Location $Root
 
 git config core.hooksPath .githooks
 Write-Host "Git hooks enabled: core.hooksPath=.githooks"
-Write-Host "Before push: packaging\package-portable.ps1 (build + zip)"
-Write-Host "Skip once: set SKIP_PORTABLE_BUILD=1"
+Write-Host "Before push: build portable ZIP, then GitHub Release (needs gh auth login)"
+Write-Host "Skip build:  `$env:SKIP_PORTABLE_BUILD=1"
+Write-Host "Skip release: `$env:SKIP_GITHUB_RELEASE=1"

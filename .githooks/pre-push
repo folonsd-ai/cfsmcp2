@@ -17,5 +17,23 @@ fi
 status=$?
 if [ "$status" -ne 0 ]; then
   echo "pre-push: portable build failed (exit $status), push aborted"
+  exit "$status"
 fi
-exit "$status"
+
+if [ "$SKIP_GITHUB_RELEASE" != "1" ]; then
+  echo "pre-push: will publish GitHub Release after push..."
+  (
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -Command "Start-Sleep -Seconds 2"
+    else
+      sleep 2
+    fi
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/publish-release.ps1
+    else
+      powershell -NoProfile -ExecutionPolicy Bypass -File packaging/publish-release.ps1
+    fi
+  ) &
+fi
+
+exit 0

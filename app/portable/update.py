@@ -18,6 +18,8 @@ GITHUB_REPO = "folonsd-ai/cfsmcp2"
 GITHUB_HOME = f"https://github.com/{GITHUB_REPO}"
 RELEASES_PAGE = f"{GITHUB_HOME}/releases/latest"
 LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+TAGS_API = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
+GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "cfsmcp2-portable"}
 PRESERVE_NAMES = frozenset({"data", "_updates", "cfsmcp2.ini"})
 
 
@@ -62,10 +64,11 @@ def _pick_portable_asset(assets: list[dict]) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _no_update_info(current: str) -> UpdateInfo:
+def _no_update_info(current: str, latest: str | None = None) -> UpdateInfo:
+    shown = latest or current
     return UpdateInfo(
         current=current,
-        latest=current,
+        latest=shown,
         newer=False,
         release_url=RELEASES_PAGE,
         download_url=None,
@@ -73,18 +76,93 @@ def _no_update_info(current: str) -> UpdateInfo:
     )
 
 
+def _version_from_tag(name: str) -> str:
+    return str(name or "").strip().lstrip("vV")
+
+
+def _best_tag_version(tags: list[dict]) -> str | None:
+    best: str | None = None
+    best_tuple = (0,)
+    for item in tags:
+        ver = _version_from_tag(str(item.get("name") or ""))
+        if not ver:
+            continue
+        parsed = _parse_version(ver)
+        if parsed > best_tuple:
+            best_tuple = parsed
+            best = ver
+    return best
+
+
+def _version_from_remote_repo(client: httpx.Client) -> str | None:
+    for branch in ("master", "main"):
+        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/app/core/version.py"
+        try:
+            resp = client.get(url, headers={"User-Agent": "cfsmcp2-portable"})
+        except Exception:
+            continue
+        if resp.status_code != 200:
+            continue
+        match = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)', resp.text)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _release_url_for_version(latest: str, has_release: bool) -> str:
+    if has_release:
+        return RELEASES_PAGE
+    tag_url = f"{GITHUB_HOME}/releases/tag/v{latest}"
+    return tag_url
+
+
+def _fetch_latest_release(client: httpx.Client) -> dict | None:
+    resp = client.get(LATEST_API, headers=GITHUB_HEADERS)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _resolve_latest_version_without_release(client: httpx.Client) -> str | None:
+    resp = client.get(TAGS_API, params={"per_page": 100}, headers=GITHUB_HEADERS)
+    resp.raise_for_status()
+    tag_ver = _best_tag_version(list(resp.json()))
+    if tag_ver:
+        return tag_ver
+    return _version_from_remote_repo(client)
+
+
 def check_github_update(timeout: float = 20.0) -> UpdateInfo:
     current = APP_VERSION
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(
-                LATEST_API,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "cfsmcp2-portable"},
+            release = _fetch_latest_release(client)
+            if release is not None:
+                latest = _version_from_tag(str(release.get("tag_name") or release.get("name") or "")) or current
+                dl_url, dl_name = _pick_portable_asset(list(release.get("assets") or []))
+                html_url = str(release.get("html_url") or RELEASES_PAGE)
+                return UpdateInfo(
+                    current=current,
+                    latest=latest,
+                    newer=_is_newer(current, latest),
+                    release_url=html_url,
+                    download_url=dl_url,
+                    download_name=dl_name,
+                )
+
+            latest = _resolve_latest_version_without_release(client)
+            if latest is None or not _is_newer(current, latest):
+                return _no_update_info(current, latest)
+
+            return UpdateInfo(
+                current=current,
+                latest=latest,
+                newer=True,
+                release_url=_release_url_for_version(latest, False),
+                download_url=None,
+                download_name=None,
             )
-            if resp.status_code == 404:
-                return _no_update_info(current)
-            resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             return _no_update_info(current)
@@ -107,19 +185,6 @@ def check_github_update(timeout: float = 20.0) -> UpdateInfo:
             download_name=None,
             error=str(exc),
         )
-
-    tag = str(data.get("tag_name") or data.get("name") or "").lstrip("v")
-    latest = tag or current
-    dl_url, dl_name = _pick_portable_asset(list(data.get("assets") or []))
-    html_url = str(data.get("html_url") or RELEASES_PAGE)
-    return UpdateInfo(
-        current=current,
-        latest=latest,
-        newer=_is_newer(current, latest),
-        release_url=html_url,
-        download_url=dl_url,
-        download_name=dl_name,
-    )
 
 
 def download_update_zip(url: str, dest: Path, timeout: float = 300.0) -> Path:
