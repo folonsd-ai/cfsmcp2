@@ -1,0 +1,39 @@
+#!/bin/sh
+# Build portable exe and zip before git push.
+if [ "$SKIP_PORTABLE_BUILD" = "1" ]; then
+  echo "pre-push: SKIP_PORTABLE_BUILD=1, skipping portable build"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+cd "$ROOT" || exit 1
+
+echo "pre-push: building portable + zip..."
+if command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/package-portable.ps1
+else
+  powershell -NoProfile -ExecutionPolicy Bypass -File packaging/package-portable.ps1
+fi
+status=$?
+if [ "$status" -ne 0 ]; then
+  echo "pre-push: portable build failed (exit $status), push aborted"
+  exit "$status"
+fi
+
+if [ "$SKIP_GITHUB_RELEASE" != "1" ]; then
+  echo "pre-push: will publish GitHub Release after push..."
+  (
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -Command "Start-Sleep -Seconds 2"
+    else
+      sleep 2
+    fi
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/publish-release.ps1
+    else
+      powershell -NoProfile -ExecutionPolicy Bypass -File packaging/publish-release.ps1
+    fi
+  ) &
+fi
+
+exit 0

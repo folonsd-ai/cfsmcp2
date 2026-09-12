@@ -1,3 +1,5 @@
+# Convenience lockfile for Docker / legacy `pip install -r`.
+# Canonical source: pyproject.toml [project.dependencies] — install with `pip install -e .`.
 fastmcp>=3.0
 zvec>=0.6.0
 fastapi>=0.140

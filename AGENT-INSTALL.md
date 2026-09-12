@@ -4,7 +4,7 @@
 
 Репозиторий: `https://github.com/folonsd-ai/cfsmcp2`
 
-**По умолчанию — Docker** с точками подключения (`MOUNT_POINTS` + volumes). Так выгрузка 1С читается с диска хоста **без zip**. Native (venv) — только если пользователь явно просит «без Docker» / «venv», либо отказался ставить Docker (§2.1).
+**По умолчанию — Docker** с точками подключения (`MOUNT_POINTS` + volumes). Так выгрузка 1С читается с диска хоста **без zip**. **Windows Portable (exe)** — если пользователь на Windows и просит «portable» / «exe» / установку без Docker и без Python (§4.5). Native (venv) — только если пользователь явно просит «без Docker» / «venv», либо отказался ставить Docker и portable (§2.1).
 
 Протокол рассчитан на **Windows, macOS и Linux**. Сначала определи ОС (не копируй PowerShell на Mac; на Unix предпочитай `python3`).
 
@@ -18,7 +18,7 @@
 | Что | Где | Когда |
 |-----|-----|-------|
 | Skill | `.cursor/skills/cfsmcp2/` в репо | Копировать в `<workspace>/.cursor/skills/cfsmcp2/` или `~/.cursor/skills/cfsmcp2/` |
-| MCP-сервер | Docker/native по этому файлу | Health `:8559`, контексты `ready` в UI |
+| MCP-сервер | Docker / native / Windows portable (§4.5) | Health UI (Docker/native `:8559`, portable `:8561` по умолчанию), контексты `ready` |
 
 Если пользователь просит **«установи skill»** (без сервера) — см.
 `.cursor/skills/cfsmcp2/SKILL.md` § «Установить skill». Не путай с `skills-cursor/`.
@@ -90,13 +90,14 @@ docker compose version
 
 Если не найден — **одним коротким сообщением** предложи установку **Docker Desktop** (не ставь сам, не качай установщик без согласия):
 
-> Docker не найден. Поставьте [Docker Desktop](https://docs.docker.com/get-docker/) (Windows / macOS) или Docker Engine + Compose на Linux. После установки перезапустите терминал (и сам Docker Desktop) и напишите — продолжим с точками подключения. Если Docker ставить не хотите — поставлю native (Python venv, §4).
+> Docker не найден. Поставьте [Docker Desktop](https://docs.docker.com/get-docker/) (Windows / macOS) или Docker Engine + Compose на Linux. После установки перезапустите терминал (и сам Docker Desktop) и напишите — продолжим с точками подключения. Если Docker ставить не хотите — на Windows можно **portable exe** (§4.5) или native (Python venv, §4).
 
 | Ответ | Что делать |
 |---|---|
 | Поставит / уже ставит Docker | Подожди подтверждения, снова `docker compose version`, затем §3. Не выдумывай, что Docker уже есть |
+| Portable / exe (Windows) | §4.5 |
 | Native / venv / без Docker | §4 |
-| Молчание после предложения | Ещё раз не спрашивай цикл; не запускай native без явного согласия. Напиши, что ждёшь Docker или «ставьте native» |
+| Молчание после предложения | Ещё раз не спрашивай цикл; не запускай native/portable без явного согласия. Напиши, что ждёшь Docker или «portable» / «native» |
 
 Демон установлен, но не запущен (Windows: Docker Desktop не стартовал): попроси открыть Docker Desktop, подожди, повтори `docker compose version`. Это не повод сразу уходить в native.
 
@@ -275,17 +276,72 @@ Health — как в §3. В UI: **«Локальный путь»** + «Обз�
 
 Не используй `--reload` на рабочей индексации.
 
+## 4.5. Windows Portable (exe)
+
+Только **Windows**. Не нужны Docker и Python на машине пользователя — один каталог с `cfsmcp2.exe`, встроенный launcher (окно + трей) и сервер (тот же exe, режим `--server`).
+
+Когда предлагать: пользователь на Windows и просит portable / exe / «поставь без Docker»; или Docker нет, Python ставить не хочет. **Не** путай с native venv (§4) и **не** собирай PyInstaller без явной просьбы разработчика — для установки бери **готовый ZIP** с [GitHub Releases](https://github.com/folonsd-ai/cfsmcp2/releases/latest).
+
+### Установка
+
+1. Скачай архив `cfsmcp2-win-portable-v*.zip` из Releases (если релиза ещё нет — собери из клона: `powershell -ExecutionPolicy Bypass -File packaging\package-portable.ps1`, ZIP в `dist\`).
+2. Распакуй в любую папку, например `D:\tools\cfsmcp2-win-portable\`. В корне — **только** `cfsmcp2.exe`, рядом `_internal\`, при первом запуске создаётся `data\`.
+3. Запусти `cfsmcp2.exe`. Иконка сразу в трее; сворачивание убирает окно с панели задач.
+4. В окне: **Старт** → дождись статуса **«Запущен»** (пока идёт «Запуск…», **Открыть UI** недоступна).
+5. **Открыть UI** или URL из поля UI (по умолчанию http://127.0.0.1:8561/ ). MCP — URL из поля MCP (по умолчанию http://127.0.0.1:8561/mcp/ ).
+6. Настройки порта и «только этот компьютер / по сети» — в окне launcher, сохраняются в `cfsmcp2.ini` рядом с exe.
+
+| Параметр | Portable (по умолчанию) |
+|---|---|
+| Порт UI + MCP | `8561` |
+| UI | http://127.0.0.1:8561/ |
+| MCP URL | http://127.0.0.1:8561/mcp/ |
+| Данные | `data\` рядом с exe (SQLite, dumps, zvec) |
+| LM Studio | http://127.0.0.1:1234 (как native, §2.2) |
+| Источники 1С | **«Локальный путь»** + «Обзор…» (tkinter на хосте) |
+
+Health (после «Старт»):
+
+```powershell
+curl.exe -sS --max-time 3 http://127.0.0.1:8561/api/health
+```
+
+Ожидается HTTP 200. Порт и host смотри в окне launcher, если меняли `cfsmcp2.ini`.
+
+### Обновление portable
+
+- В окне launcher: щелчок по бейджу **версии** (`v…`) → проверка GitHub → при новой версии скачивание, установка и предложение перезапуска. Каталоги `data\` и `cfsmcp2.ini` не перезаписываются.
+- Вручную: ZIP с Releases → распаковать поверх установки, **не** заменяя `data\` и `cfsmcp2.ini`.
+
+### MCP (portable)
+
+URL и порт — **из окна launcher** (не подставляй `:8559`, если в UI указан другой порт). Пример для порта по умолчанию:
+
+```json
+{
+  "mcpServers": {
+    "cfsmcp2": {
+      "url": "http://127.0.0.1:8561/mcp/"
+    }
+  }
+}
+```
+
+Один экземпляр launcher на каталог установки (lock в `data\.launcher.lock`). Перед пересборкой разработчиком закрой `cfsmcp2.exe`.
+
+Подробнее для пользователя: [README-portable.txt](README-portable.txt).
+
 ## 5. LM Studio (после подъёма сервера)
 
 Проверка и предложение установки — **§2.2** (до или вместе с Docker). Здесь только эксплуатация:
 
-1. Docker: URL в compose уже `http://host.docker.internal:1234`. Native: `http://127.0.0.1:1234`.
+1. Docker: URL в compose уже `http://host.docker.internal:1234`. Native и portable: `http://127.0.0.1:1234`.
 2. На чистой установке URL в UI прописывать не обязательно.
 3. Если после §2.2 Local Server так и offline — в отчёте §8 напиши это; не чини переписыванием проекта.
 
 ## 6. MCP для разных ИИ-клиентов
 
-Сервер — **Streamable HTTP** на `http://127.0.0.1:8559/mcp/`. Канон — со слэшем. **26 tools** (группы: контексты, поиск, объект, BSL, формы, СКД, статус). Список и правила маршрута — [README.md](README.md) § MCP. `list_code_modules` требует `q` (≥2 символа); полный перечень модулей не отдаётся. Если пользователь назвал конфигурацию — искать **только в ней**.
+Сервер — **Streamable HTTP** на `/mcp/` (канон — со слэшем). Docker/native по умолчанию: `http://127.0.0.1:8559/mcp/`; **Windows portable** — URL из окна launcher (по умолчанию `http://127.0.0.1:8561/mcp/`). **26 tools** (группы: контексты, поиск, объект, BSL, формы, СКД, статус). Список и правила маршрута — [README.md](README.md) § MCP. `list_code_modules` требует `q` (≥2 символа); полный перечень модулей не отдаётся. Если пользователь назвал конфигурацию — искать **только в ней**.
 
 ### Cursor
 
@@ -343,7 +399,7 @@ VS Code:
 
 После health OK **не предлагай upload zip**, если выгрузка уже на диске хоста.
 
-1. UI → добавить сущность → **«Точка подключения»** (Docker) или **«Локальный путь»** (native).
+1. UI → добавить сущность → **«Точка подключения»** (Docker) или **«Локальный путь»** (native / portable).
 2. Docker: выбрать точку `dumps` → Обзор → каталог с `Configuration.xml` или `.txt`. Путь будет вида `/mnt/dumps/...`.
 3. Дождаться `ready` (большой dump — минуты–часы).
 4. MCP: `list_contexts` — только **enabled + ready**.
@@ -354,7 +410,7 @@ VS Code:
 
 ## 8. Что сообщить пользователю в конце
 
-1. Способ: **Docker** (+ какие `MOUNT_POINTS` / ok, какая `TZ`) / native / ошибка.
+1. Способ: **Docker** (+ какие `MOUNT_POINTS` / ok, какая `TZ`) / **Windows portable** / native / ошибка.
 2. Health: OK / нет; runtime mounts ok.
 3. Какой клиент настроен, путь к конфигу и фрагмент с `cfsmcp2`.
 4. Дальше: LM Studio online (§2.2) → точка / путь → `ready` → `list_contexts`. Если LM Studio предложили и ещё нет — так и скажи.
@@ -371,6 +427,7 @@ VS Code:
 ## Обновление
 
 - Docker: `docker compose up -d --build` (после правки `MOUNT_POINTS`/volumes — пересоздать контейнер). Смена `TZ` — `up -d` с новой переменной, `--build` не обязателен.
+- Windows portable: бейдж версии в launcher или ZIP с Releases поверх установки (сохранить `data\`, `cfsmcp2.ini`).
 - Native: обновить pip в venv, перезапустить процесс.
 - Конфиг MCP — только если URL ещё не настроен или отличается.
 - Прерванная индексация при старте дожимается сама.

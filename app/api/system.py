@@ -34,6 +34,73 @@ def get_runtime():
     return mounts_svc.runtime_snapshot()
 
 
+class JobQueueReorderRequest(BaseModel):
+    job_ids: list[str] = Field(..., description="Pending job ids in desired order")
+
+
+@router.get("/job-queue")
+def get_job_queue():
+    """Serial parse/reindex queue: one running job, rest pending (reorder via PATCH)."""
+    from app.services import jobs
+
+    return jobs.enrich_queue_names(jobs.queue_snapshot())
+
+
+@router.patch("/job-queue/order")
+def reorder_job_queue(body: JobQueueReorderRequest):
+    from app.services import jobs
+
+    try:
+        jobs.reorder_pending(body.job_ids)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return jobs.enrich_queue_names(jobs.queue_snapshot())
+
+
+def _normalize_entity_after_pause(entity_id: int | None, kind: str) -> None:
+    """Revert transient pipeline statuses so paused jobs show a stable board state."""
+    if entity_id is None:
+        return
+    from app.core.config import settings
+    from app.core.database import connect
+    from app.repositories import entities as ent_repo
+
+    conn = connect(settings.db_path)
+    try:
+        entity = ent_repo.get_entity(conn, int(entity_id))
+        if not entity:
+            return
+        st = str(entity.get("status") or "")
+        if kind == "parse_entity" and st == "parsing":
+            oc = int(entity.get("object_count") or 0)
+            next_st = "parsed" if oc > 0 else "uploaded"
+            ent_repo.set_status(conn, int(entity_id), next_st, error_message="")
+            conn.commit()
+    finally:
+        conn.close()
+
+
+@router.delete("/job-queue/{job_id}")
+def pause_job_queue_item(job_id: str):
+    """Pause a queued or running job; it stays in the paused list until resumed."""
+    from app.services import jobs
+
+    paused = jobs.pause_job(job_id)
+    if paused is None:
+        raise HTTPException(404, "Job not found in queue")
+    _normalize_entity_after_pause(paused.entity_id, paused.kind)
+    return jobs.enrich_queue_names(jobs.queue_snapshot())
+
+
+@router.post("/job-queue/{job_id}/resume")
+def resume_job_queue_item(job_id: str):
+    from app.services import jobs
+
+    if jobs.resume_job(job_id) is None:
+        raise HTTPException(404, "Paused job not found")
+    return jobs.enrich_queue_names(jobs.queue_snapshot())
+
+
 @router.get("/mcp-busy")
 def get_mcp_busy(recent_window_sec: float = Query(60.0, ge=1.0, le=3600.0)):
     """In-flight MCP tools + embed/reindex busy + recent completions (no UI).

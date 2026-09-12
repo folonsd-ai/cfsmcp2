@@ -1,0 +1,10 @@
+[server]
+# 127.0.0.1 — только этот ПК; 0.0.0.0 — по сети (меняется в GUI launcher)
+host = 127.0.0.1
+port = 8561
+
+[embeddings]
+lm_studio_url = http://127.0.0.1:1234
+
+[launcher]
+minimize_to_tray = true

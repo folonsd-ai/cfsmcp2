@@ -117,9 +117,9 @@ Skill ≠ работающий MCP. Сервер поднимается отде
 
 Кратко:
 
-1. Docker (по умолчанию) или native (venv) — см. AGENT-INSTALL.
-2. Health: `GET http://127.0.0.1:8559/api/health` → `{"status":"ok",…}`.
-3. MCP в клиенте (Cursor — merge, не затирать другие серверы):
+1. Docker (по умолчанию), **Windows portable (exe, §4.5)** или native (venv) — см. AGENT-INSTALL.
+2. Health: `GET …/api/health` → `{"status":"ok",…}` (Docker/native `:8559`, portable `:8561` по умолчанию — URL из launcher).
+3. MCP в клиенте (Cursor — merge, не затирать другие серверы; portable — URL из окна launcher):
 
 ```json
 {
@@ -138,6 +138,10 @@ Skill ≠ работающий MCP. Сервер поднимается отде
 Команда пользователю для установки сервера:
 
 > Установи cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md`.
+
+Windows portable без Docker/Python:
+
+> Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
 
 ## Preflight перед работой с tools
 

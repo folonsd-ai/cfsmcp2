@@ -18,6 +18,7 @@ from app.api import system as system_api
 from app.api import tags as tags_api
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.paths import resolve_static_dir
 from app.core.version import APP_VERSION
 from app.mcp.server import mcp
 from app.services.pipeline import backfill_entity_types, cleanup_metadata_orphans, recover_interrupted_indexing
@@ -164,7 +165,7 @@ def create_app() -> FastAPI:
                     tier="verbose",
                 )
 
-    static_dir = Path(__file__).parent / "static"
+    static_dir = resolve_static_dir()
     api.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     @api.get("/")
@@ -184,12 +185,16 @@ app = create_app()
 
 def run() -> None:
     uvicorn.run(
-        "app.main:app",
+        app,
         host=settings.host,
         port=settings.port,
         reload=False,
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     run()
+
+
+if __name__ == "__main__":
+    main()

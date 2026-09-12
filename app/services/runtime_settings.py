@@ -276,6 +276,7 @@ def get_all() -> dict:
         bsl_embed_limits_bounds,
         bsl_embed_window_presets,
         default_bsl_embed_limits,
+        embed_model_window_presets,
     )
 
     return {
@@ -301,6 +302,7 @@ def get_all() -> dict:
         "bsl_embed_limits_defaults": default_bsl_embed_limits(),
         "bsl_embed_limits_bounds": bsl_embed_limits_bounds(),
         "bsl_embed_window_presets": bsl_embed_window_presets(),
+        "embed_model_window_presets": embed_model_window_presets(),
     }
 
 

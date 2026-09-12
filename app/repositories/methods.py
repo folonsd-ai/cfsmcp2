@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.repositories.objects import path_range_params
@@ -649,3 +650,61 @@ def get_module_structure(
         "exported": exported,
         "total_methods": len(methods),
     }
+
+
+def count_methods_under_parent(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    parent_path: str,
+) -> int:
+    """Count Procedure/Function rows under ``parent_path`` (child range scan)."""
+    parent = (parent_path or "").strip().rstrip(".")
+    if not parent:
+        return 0
+    lo, hi = path_range_params(parent + ".")
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM objects INDEXED BY idx_objects_path
+        WHERE entity_id=?
+          AND path BETWEEN ? AND ?
+          AND kind IN ('Procedure', 'Function')
+        """,
+        (entity_id, lo, hi),
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
+
+
+def rank_methods_lexical(
+    items: list[dict[str, Any]],
+    query: str,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Rank methods by exact → prefix → substring → difflib(name/signature)."""
+    q = (query or "").strip()
+    qcf = q.casefold()
+    lim = max(1, int(limit or 50))
+
+    def _key(item: dict[str, Any]) -> tuple:
+        name = str(item.get("name") or "")
+        ncf = name.casefold()
+        sig = str(item.get("signature") or item.get("synonym") or "")
+        if q and name == q:
+            return (0, 0, name)
+        if q and ncf == qcf:
+            return (1, 0, name)
+        if q and (name.startswith(q) or ncf.startswith(qcf)):
+            return (2, -len(name), name)
+        if q and (q in name or qcf in ncf):
+            return (3, -len(name), name)
+        if q:
+            ratio = max(
+                SequenceMatcher(None, qcf, ncf).ratio(),
+                SequenceMatcher(None, qcf, sig.casefold()).ratio() if sig else 0.0,
+            )
+            return (4, -ratio, name)
+        return (5, 0, name)
+
+    ranked = sorted(items, key=_key)
+    return ranked[:lim]

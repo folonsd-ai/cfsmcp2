@@ -28,11 +28,17 @@ MAX_CHUNKS_MIN, MAX_CHUNKS_HARD = 1, 32
 
 # Recommended char budgets for common embedding context windows (no tokenizer:
 # ~2.7–2.9 chars/token for RU/BSL, ~8–10% headroom for meta/special tokens).
+# Explicit UI recommendation overrides (model id → preset id). Takes precedence over
+# max_context_length nearest-match when the model reports a smaller native ctx.
+EMBED_MODEL_WINDOW_PRESET: dict[str, str] = {
+    "text-embedding-user2-1c": "512",
+}
+
 BSL_EMBED_WINDOW_PRESETS: list[dict[str, Any]] = [
     {
         "id": "256",
         "tokens": 256,
-        "models_hint": "text-embedding-user2-1c",
+        "ui_hidden": True,
         "limits": {
             "passage_max_chars": 680,
             "chunk_size": 540,
@@ -44,7 +50,7 @@ BSL_EMBED_WINDOW_PRESETS: list[dict[str, Any]] = [
     {
         "id": "512",
         "tokens": 512,
-        "models_hint": "e5-small / e5-base / multilingual-e5-small",
+        "models_hint": "text-embedding-user2-1c / e5-small / e5-base / multilingual-e5-small",
         "limits": {
             "passage_max_chars": 1350,
             "chunk_size": 1100,
@@ -210,10 +216,49 @@ def get_entity_bsl_embed_limits(entity: dict | None) -> dict[str, int]:
     return get_bsl_embed_limits()
 
 
-def bsl_embed_window_presets() -> list[dict[str, Any]]:
+def embed_model_window_presets() -> dict[str, str]:
+    """Model id → recommended visible preset id (for UI hints / ingest defaults)."""
+    visible = {str(p["id"]) for p in bsl_embed_window_presets()}
+    out: dict[str, str] = {}
+    for model_id, preset_id in EMBED_MODEL_WINDOW_PRESET.items():
+        pid = normalize_embed_window_preset(preset_id)
+        if pid and pid in visible:
+            out[str(model_id)] = pid
+    return out
+
+
+def recommended_embed_window_preset_for_model(
+    model_id: str | None,
+    *,
+    max_context_length: int | None = None,
+) -> str | None:
+    """Resolve recommended preset: explicit model map, else nearest visible tokens."""
+    mid = (model_id or "").strip()
+    mapped = embed_model_window_presets().get(mid)
+    if mapped:
+        return mapped
+    ctx = int(max_context_length) if max_context_length is not None else None
+    if ctx is None or ctx <= 0:
+        return None
+    best: str | None = None
+    best_dist = 10**9
+    for preset in bsl_embed_window_presets():
+        tok = int(preset.get("tokens") or 0)
+        if tok <= 0:
+            continue
+        dist = abs(tok - ctx)
+        if dist < best_dist:
+            best_dist = dist
+            best = str(preset["id"])
+    return best
+
+
+def bsl_embed_window_presets(*, include_hidden: bool = False) -> list[dict[str, Any]]:
     """Presets for UI: each limits dict is already normalized/clamped."""
     out: list[dict[str, Any]] = []
     for preset in BSL_EMBED_WINDOW_PRESETS:
+        if preset.get("ui_hidden") and not include_hidden:
+            continue
         lim = normalize_bsl_embed_limits(base=dict(preset["limits"]))
         out.append(
             {
