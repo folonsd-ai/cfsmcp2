@@ -77,14 +77,15 @@ if ($LASTEXITCODE -eq 0) {
     exit 0
 }
 
-$Notes = @"
-Windows portable: cfsmcp2.exe + launcher (tray, auto-update).
-
-Скачайте ``cfsmcp2-win-portable-v$Version.zip``, распакуйте, запустите ``cfsmcp2.exe``.
-"@
+$NotesTemplate = Join-Path $Root "packaging\assets\release-notes-template.md"
+if (-not (Test-Path -LiteralPath $NotesTemplate)) {
+    throw "Release notes template not found: $NotesTemplate"
+}
+$Notes = (Get-Content -LiteralPath $NotesTemplate -Raw -Encoding UTF8).Replace("{version}", $Version)
 
 $NotesPath = Join-Path $Root "dist\.release-notes-$Version.md"
-[System.IO.File]::WriteAllText($NotesPath, $Notes, [System.Text.UTF8Encoding]::new($false))
+$Utf8Bom = New-Object System.Text.UTF8Encoding $true
+[System.IO.File]::WriteAllText($NotesPath, $Notes, $Utf8Bom)
 
 Write-Host "publish-release: creating $Tag ..."
 & gh release create $Tag $ZipPath --title $Version --notes-file $NotesPath
