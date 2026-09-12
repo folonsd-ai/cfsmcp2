@@ -9,12 +9,26 @@ from PIL import Image, ImageDraw
 
 log = logging.getLogger("cfsmcp2.launcher")
 
-ACCENT = (34, 197, 94, 255)
 SLATE = (15, 23, 42, 255)
 WHITE = (248, 250, 252, 255)
 
+# Keep in sync with LauncherTheme.ACCENT/MUTED/WARNING/DANGER (ui_theme.py).
+ACCENT = (34, 197, 94, 255)
+MUTED = (148, 163, 184, 255)
+WARNING = (245, 165, 36, 255)
+DANGER = (239, 68, 68, 255)
+
+TRAY_STATE_COLORS: dict[str, tuple[int, int, int, int]] = {
+    "running": ACCENT,
+    "stopped": MUTED,
+    "loading": WARNING,
+    "error": DANGER,
+}
+
 # Native draw size; upscaled with NEAREST so edges stay crisp in the tray.
 TRAY_DRAW_SIZE = 32
+
+_tray_image_cache: dict[tuple[str, int], Image.Image] = {}
 
 
 def draw_mark(size: int) -> Image.Image:
@@ -42,13 +56,17 @@ def draw_mark(size: int) -> Image.Image:
     return img
 
 
-def draw_tray_mark(size: int = TRAY_DRAW_SIZE) -> Image.Image:
-    """Tray monogram: white «C» on green disk (readable at 16px)."""
+def draw_tray_mark(
+    size: int = TRAY_DRAW_SIZE,
+    *,
+    disk_color: tuple[int, int, int, int] = ACCENT,
+) -> Image.Image:
+    """Tray monogram: white «C» on colored disk (readable at 16px)."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     cx = cy = size // 2
     r = int(size * 0.47)
-    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=ACCENT)
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=disk_color)
     ring = max(1, size // 16)
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=SLATE, width=ring)
 
@@ -67,10 +85,16 @@ def draw_tray_mark(size: int = TRAY_DRAW_SIZE) -> Image.Image:
     return img
 
 
-def load_tray_image(ico_path: Path | None, size: int = 64) -> Image.Image:
-    """Tray always uses the bold variant; ICO resize blurs at 16px."""
-    del ico_path  # window icon still uses cfs-mark.ico
-    tray = draw_tray_mark(TRAY_DRAW_SIZE)
-    if size == TRAY_DRAW_SIZE:
-        return tray
-    return tray.resize((size, size), Image.Resampling.NEAREST)
+def load_tray_image(ico_path: Path | None, state: str = "stopped", size: int = 64) -> Image.Image:
+    """Return cached tray image for launcher state (window icon still uses cfs-mark.ico)."""
+    del ico_path
+    tray_state = state if state in TRAY_STATE_COLORS else "stopped"
+    cache_key = (tray_state, size)
+    cached = _tray_image_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    tray = draw_tray_mark(TRAY_DRAW_SIZE, disk_color=TRAY_STATE_COLORS[tray_state])
+    if size != TRAY_DRAW_SIZE:
+        tray = tray.resize((size, size), Image.Resampling.NEAREST)
+    _tray_image_cache[cache_key] = tray
+    return tray

@@ -35,13 +35,23 @@ class LauncherTheme:
     INPUT_BG = "#272F42"
     INPUT_BORDER = "#475569"
     WARNING = "#F5A524"
+    STATUS_STOPPED_BG = "#1A2234"
+    STATUS_LOADING_BG = "#2A2415"
+    STATUS_RUNNING_BG = "#16271E"
+    STATUS_UNRESPONSIVE_BG = "#2A2415"
+    STATUS_ERROR_BG = "#2A1A1D"
+    STATUS_FLASH_BG = "#1A2838"
+    BTN_PRIMARY_WEIGHT = 3
+    BTN_SECONDARY_WEIGHT = 2
     BTN_DISABLED_FG = "#64748B"
     BTN_DISABLED_BORDER = "#2A3448"
     BTN_DISABLED_PRIMARY_BG = "#1A2E24"
     BTN_DISABLED_DANGER_BG = "#2E1A1F"
     BTN_DISABLED_SECONDARY_BG = "#1A2234"
 
+    SCALE = 1.0
     WIN_WIDTH = 400
+    WIN_MIN_HEIGHT = 380
     PAD_X = 16
     BTN_HEIGHT = 34
 
@@ -49,6 +59,17 @@ class LauncherTheme:
     MONO = "Consolas"
     _SANS_CANDIDATES = ("IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI", "Tahoma")
     _MONO_CANDIDATES = ("JetBrains Mono", "Cascadia Mono", "Consolas", "Courier New")
+
+    @classmethod
+    def set_scale(cls, root: tk.Misc) -> None:
+        try:
+            cls.SCALE = max(1.0, root.winfo_fpixels("1i") / 96.0)
+        except tk.TclError:
+            cls.SCALE = 1.0
+
+    @classmethod
+    def sp(cls, px: int) -> int:
+        return max(px, int(round(px * cls.SCALE)))
 
     @classmethod
     def init_fonts(cls, root: tk.Misc) -> None:
@@ -79,6 +100,7 @@ class LauncherTheme:
     @classmethod
     def apply_ttk(cls, root: tk.Misc) -> ttk.Style:
         cls.init_fonts(root)
+        cls.set_scale(root)
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure(".", background=cls.CARD, foreground=cls.FG, font=cls.font_body())
@@ -118,7 +140,48 @@ class LauncherTheme:
             foreground=[("disabled", cls.MUTED)],
             bordercolor=[("focus", cls.ACCENT)],
         )
+        style.configure(
+            "TCheckbutton",
+            background=cls.CARD,
+            foreground=cls.FG,
+            font=cls.font_body(),
+            focuscolor=cls.CARD,
+            borderwidth=0,
+            padding=(0, 2),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", cls.CARD), ("selected", cls.CARD), ("disabled", cls.CARD)],
+            foreground=[("active", cls.FG), ("selected", cls.FG), ("disabled", cls.MUTED)],
+            indicatorcolor=[("selected", cls.ACCENT), ("pressed", cls.ACCENT)],
+        )
         return style
+
+    @classmethod
+    def make_checkbutton(
+        cls,
+        parent: tk.Misc,
+        text: str,
+        variable: tk.Variable,
+        command,
+    ) -> tk.Checkbutton:
+        """Dark-theme checkbox without ttk hover flash on Windows."""
+        return tk.Checkbutton(
+            parent,
+            text=text,
+            variable=variable,
+            command=command,
+            bg=cls.CARD,
+            fg=cls.FG,
+            selectcolor=cls.INPUT_BG,
+            activebackground=cls.CARD,
+            activeforeground=cls.FG,
+            highlightthickness=0,
+            bd=0,
+            anchor="w",
+            font=cls.font_body(),
+            cursor="hand2",
+        )
 
     @classmethod
     def card(cls, parent: tk.Misc, *, pady: int = 6) -> tuple[tk.Frame, tk.Frame]:
@@ -129,10 +192,23 @@ class LauncherTheme:
             highlightbackground=cls.CARD_BORDER,
             highlightcolor=cls.CARD_BORDER,
         )
-        outer.pack(fill=tk.X, padx=cls.PAD_X, pady=pady)
-        inner = tk.Frame(outer, bg=cls.CARD, padx=12, pady=10)
+        outer.pack(fill=tk.X, padx=cls.sp(cls.PAD_X), pady=cls.sp(pady))
+        inner = tk.Frame(outer, bg=cls.CARD, padx=cls.sp(12), pady=cls.sp(10))
         inner.pack(fill=tk.X)
         return outer, inner
+
+    @classmethod
+    def popup_menu(cls, parent: tk.Misc) -> tk.Menu:
+        return tk.Menu(
+            parent,
+            tearoff=0,
+            bg=cls.INPUT_BG,
+            fg=cls.FG,
+            activebackground=cls.ACCENT,
+            activeforeground=cls.ACCENT_FG,
+            borderwidth=0,
+            relief=tk.FLAT,
+        )
 
     @classmethod
     def section_title(cls, parent: tk.Misc, text: str) -> tk.Label:
@@ -146,6 +222,34 @@ class LauncherTheme:
         )
 
     @classmethod
+    def _button_palette(cls, kind: str) -> tuple[str, str, str, str, str]:
+        if kind == "primary":
+            return cls.ACCENT, cls.ACCENT_FG, cls.ACCENT_HOVER, cls.ACCENT, "bold"
+        if kind == "danger":
+            return cls.DANGER, cls.FG, cls.DANGER_HOVER, cls.DANGER, "normal"
+        if kind == "stop":
+            return cls.INPUT_BG, cls.FG, cls.DANGER, cls.CARD_BORDER, "bold"
+        if kind == "footer":
+            return cls.INPUT_BG, cls.FG, cls.CARD_BORDER, cls.CARD_BORDER, "bold"
+        return cls.INPUT_BG, cls.FG, cls.CARD_BORDER, cls.CARD_BORDER, "normal"
+
+    @classmethod
+    def _wire_button_hover(cls, btn: tk.Button) -> None:
+        btn.unbind("<Enter>")
+        btn.unbind("<Leave>")
+
+        def _on_enter(_e: tk.Event) -> None:
+            if str(btn["state"]) != tk.DISABLED:
+                btn.configure(bg=btn._theme_hover)  # type: ignore[attr-defined]
+
+        def _on_leave(_e: tk.Event) -> None:
+            if str(btn["state"]) != tk.DISABLED:
+                btn.configure(bg=btn._theme_bg)  # type: ignore[attr-defined]
+
+        btn.bind("<Enter>", _on_enter)
+        btn.bind("<Leave>", _on_leave)
+
+    @classmethod
     def make_button(
         cls,
         parent: tk.Misc,
@@ -154,18 +258,7 @@ class LauncherTheme:
         *,
         kind: str = "secondary",
     ) -> tk.Button:
-        if kind == "primary":
-            bg, fg, hover = cls.ACCENT, cls.ACCENT_FG, cls.ACCENT_HOVER
-            border = cls.ACCENT
-            weight = "bold"
-        elif kind == "danger":
-            bg, fg, hover = cls.DANGER, cls.FG, cls.DANGER_HOVER
-            border = cls.DANGER
-            weight = "normal"
-        else:
-            bg, fg, hover = cls.INPUT_BG, cls.FG, cls.CARD_BORDER
-            border = cls.CARD_BORDER
-            weight = "normal"
+        bg, fg, hover, border, weight = cls._button_palette(kind)
 
         btn = tk.Button(
             parent,
@@ -178,8 +271,8 @@ class LauncherTheme:
             disabledforeground=cls.MUTED,
             font=cls.font_btn(weight),
             relief=tk.FLAT,
-            padx=10,
-            pady=8,
+            padx=cls.sp(10),
+            pady=cls.sp(8),
             cursor="hand2",
             borderwidth=0,
             highlightthickness=1,
@@ -191,18 +284,21 @@ class LauncherTheme:
         btn._theme_fg = fg  # type: ignore[attr-defined]
         btn._theme_border = border  # type: ignore[attr-defined]
         btn._theme_hover = hover  # type: ignore[attr-defined]
-
-        def _on_enter(_e: tk.Event) -> None:
-            if str(btn["state"]) != tk.DISABLED:
-                btn.configure(bg=hover)
-
-        def _on_leave(_e: tk.Event) -> None:
-            if str(btn["state"]) != tk.DISABLED:
-                btn.configure(bg=bg)
-
-        btn.bind("<Enter>", _on_enter)
-        btn.bind("<Leave>", _on_leave)
+        cls._wire_button_hover(btn)
         return btn
+
+    @classmethod
+    def set_button_kind(cls, btn: tk.Button, kind: str) -> None:
+        bg, fg, hover, border, weight = cls._button_palette(kind)
+        btn._theme_kind = kind  # type: ignore[attr-defined]
+        btn._theme_bg = bg  # type: ignore[attr-defined]
+        btn._theme_fg = fg  # type: ignore[attr-defined]
+        btn._theme_border = border  # type: ignore[attr-defined]
+        btn._theme_hover = hover  # type: ignore[attr-defined]
+        btn.configure(font=cls.font_btn(weight))
+        enabled = str(btn["state"]) != tk.DISABLED
+        cls.set_button_enabled(btn, enabled)
+        cls._wire_button_hover(btn)
 
     @classmethod
     def _disabled_style(cls, kind: str) -> tuple[str, str, str]:
@@ -210,6 +306,8 @@ class LauncherTheme:
             return cls.BTN_DISABLED_PRIMARY_BG, cls.BTN_DISABLED_FG, cls.BTN_DISABLED_BORDER
         if kind == "danger":
             return cls.BTN_DISABLED_DANGER_BG, cls.BTN_DISABLED_FG, cls.BTN_DISABLED_BORDER
+        if kind in ("stop", "footer"):
+            return cls.BTN_DISABLED_SECONDARY_BG, cls.BTN_DISABLED_FG, cls.BTN_DISABLED_BORDER
         return cls.BTN_DISABLED_SECONDARY_BG, cls.BTN_DISABLED_FG, cls.BTN_DISABLED_BORDER
 
     @classmethod

@@ -6,7 +6,10 @@ import re
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
+from typing import Any
 
 import sqlite3
 import zvec
@@ -23,6 +26,8 @@ from app.services.embeddings import EmbeddingClient
 from app.services.help_parser import HELP_KIND
 from app.services.phase_timing import PhaseTimer, attach_timing, bottleneck_hint
 from app.services.pipeline import collection_path
+from app.services.process_io import PageFaultSpan
+from app.services.tool_budget import ToolBudget, ToolBudgetExceeded
 from app.services.zvec_store import zvec_store
 
 log = logging.getLogger("cfsmcp2.search")
@@ -500,6 +505,7 @@ class _SqlRecallBudget:
         "sql_recall_budget_hit",
         "stem_recall_budget_hit",
         "unscoped_mid_like_skipped",
+        "fts_no_hits_skipped",
     )
 
     def __init__(self, budget_ms: float | None = None) -> None:
@@ -512,6 +518,7 @@ class _SqlRecallBudget:
         self.sql_recall_budget_hit = False
         self.stem_recall_budget_hit = False
         self.unscoped_mid_like_skipped = False
+        self.fts_no_hits_skipped = False
 
     def remaining_ms(self) -> float:
         return max(0.0, (self.deadline - time.perf_counter()) * 1000.0)
@@ -527,7 +534,9 @@ class _SqlRecallBudget:
             payload["sql_recall_budget_hit"] = True
         if self.stem_recall_budget_hit:
             payload["stem_recall_budget_hit"] = True
-        if self.unscoped_mid_like_skipped:
+        if self.fts_no_hits_skipped:
+            payload["sql_recall_skipped"] = "fts_no_hits"
+        elif self.unscoped_mid_like_skipped:
             payload["sql_recall_skipped"] = "unscoped_mid_like_forbidden"
 
 
@@ -1320,13 +1329,90 @@ def parse_context_ref(raw: str) -> tuple[str, str]:
     return "name", s
 
 
-def _open_collection(entity: dict):
+def _apply_open_coll_metrics(timer: PhaseTimer, meta: dict | None = None) -> None:
+    if meta is None:
+        meta = zvec_store.take_open_metrics()
+    if not meta:
+        return
+    lock_wait = float(meta.get("lock_wait_ms") or 0)
+    if lock_wait > 0:
+        timer.add("open_coll_lock_wait", lock_wait / 1000.0)
+    load_ms = float(meta.get("load_ms") or 0)
+    if load_ms > 0:
+        timer.add("open_coll_load", load_ms / 1000.0)
+
+
+def _open_collection(entity: dict, *, timer: PhaseTimer | None = None):
     path = collection_path(entity["id"], entity["model"])
     if not path.exists():
         raise FileNotFoundError(
             f"Index for context '{entity['name']}' not found at {path}. Run reindex in UI."
         )
-    return zvec_store.get(path, read_only=True)
+    coll = zvec_store.get(path, read_only=True)
+    if timer is not None:
+        _apply_open_coll_metrics(timer)
+    return coll
+
+
+def _zvec_query(coll, *, timeout_ms: float | None = None, **kwargs):
+    if timeout_ms is None or timeout_ms <= 0 or timeout_ms == float("inf"):
+        return coll.query(**kwargs)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(coll.query, **kwargs)
+        try:
+            return fut.result(timeout=timeout_ms / 1000.0)
+        except FuturesTimeoutError as exc:
+            raise ToolBudgetExceeded("zvec_budget") from exc
+
+
+def _parent_sql_fuzzy_max_candidates() -> int:
+    """Max methods under parent for lexical-only fuzzy (no zvec RRF)."""
+    return max(1, int(getattr(settings, "fuzzy_parent_sql_max_candidates", 400) or 400))
+
+
+def _methods_from_parent_sql_ranked(
+    ranked: list[dict],
+    *,
+    parent: str,
+) -> list[dict]:
+    out: list[dict] = []
+    for item in ranked:
+        sig = str(item.get("signature") or item.get("synonym") or "")
+        out.append(
+            {
+                "path": item["path"],
+                "parent_path": parent,
+                "name": item.get("name") or "",
+                "kind": item.get("kind") or "",
+                "export": bool(item.get("export")),
+                "signature": sig,
+                "doc_preview": "",
+                "module_role": item.get("module_role") or "",
+            }
+        )
+    return out
+
+
+def _should_skip_sql_recall_no_fts(
+    query: str,
+    hits: list[dict],
+    path_prefix: str | None,
+) -> bool:
+    if hits:
+        return False
+    if (path_prefix or "").strip():
+        return False
+    return _looks_like_method_identifier(query)
+
+
+def _search_scale_inflight(scale: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from app.services import mcp_busy
+
+        scale["mcp_inflight"] = mcp_busy.inflight_count()
+    except Exception:
+        pass
+    return scale
 
 
 def _dedupe_hits_by_path(hits: list[dict]) -> list[dict]:
@@ -1721,6 +1807,7 @@ def fts_search(
     path_prefix: str | None = None,
     compact: bool = False,
     literal: bool = False,
+    budget: ToolBudget | None = None,
 ) -> dict:
     timer = PhaseTimer()
     ref, tag, entities = resolve_context_group(context)
@@ -1760,7 +1847,7 @@ def fts_search(
     try:
         for entity in entities:
             with timer.span("open_coll"):
-                coll = _open_collection(entity)
+                coll = _open_collection(entity, timer=timer)
             with timer.span("fts"):
                 docs = _query_fts(
                     coll,
@@ -1783,50 +1870,55 @@ def fts_search(
             # a replacement for C; flags stay separate (sql_recall_budget_hit
             # vs stem_recall_budget_hit).
             recall_budget = _SqlRecallBudget()
-            with timer.span("sql_recall"):
-                if not recall_budget.exhausted():
-                    hits = _merge_sql_hits(
-                        hits,
-                        _sql_token_hits(
+            if _should_skip_sql_recall_no_fts(query, hits, prefix):
+                recall_budget.fts_no_hits_skipped = True
+            elif budget and budget.exhausted():
+                budget.mark_degraded("tool_budget")
+            else:
+                with timer.span("sql_recall"):
+                    if not recall_budget.exhausted():
+                        hits = _merge_sql_hits(
+                            hits,
+                            _sql_token_hits(
+                                conn,
+                                entity,
+                                query,
+                                kind=search_kind,
+                                include_borrowed=include_borrowed,
+                                limit=limit + offset,
+                                path_prefix=prefix,
+                                fts_hit_count=len(hits),
+                                pool_strong=_pool_strong_for_token_sql(query, hits),
+                                budget=recall_budget,
+                                needs_report_roots=(
+                                    (
+                                        prefer_report_roots
+                                        or ranking_svc.looks_like_report_query(query)
+                                    )
+                                    and not any(
+                                        str(h.get("kind") or "") == "Report"
+                                        and ranking_svc.is_root_object(h)
+                                        for h in hits
+                                    )
+                                    and not _report_recall_blocked(query, hits)
+                                ),
+                            ),
+                        )
+                    if not recall_budget.exhausted():
+                        if prefer_report_roots or ranking_svc.looks_like_report_query(query):
+                            hits = ranking_svc.ensure_report_roots(hits)
+                        hits = _prefer_report_roots(hits, prefer=prefer_report_roots)
+                    if not recall_budget.exhausted():
+                        hits = _apply_howto_help_recall(
                             conn,
                             entity,
                             query,
-                            kind=search_kind,
-                            include_borrowed=include_borrowed,
-                            limit=limit + offset,
+                            hits,
                             path_prefix=prefix,
-                            fts_hit_count=len(hits),
-                            pool_strong=_pool_strong_for_token_sql(query, hits),
+                            limit=limit + offset,
+                            stem_recall=False,
                             budget=recall_budget,
-                            needs_report_roots=(
-                                (
-                                    prefer_report_roots
-                                    or ranking_svc.looks_like_report_query(query)
-                                )
-                                and not any(
-                                    str(h.get("kind") or "") == "Report"
-                                    and ranking_svc.is_root_object(h)
-                                    for h in hits
-                                )
-                                and not _report_recall_blocked(query, hits)
-                            ),
-                        ),
-                    )
-                if not recall_budget.exhausted():
-                    if prefer_report_roots or ranking_svc.looks_like_report_query(query):
-                        hits = ranking_svc.ensure_report_roots(hits)
-                    hits = _prefer_report_roots(hits, prefer=prefer_report_roots)
-                if not recall_budget.exhausted():
-                    hits = _apply_howto_help_recall(
-                        conn,
-                        entity,
-                        query,
-                        hits,
-                        path_prefix=prefix,
-                        limit=limit + offset,
-                        stem_recall=False,
-                        budget=recall_budget,
-                    )
+                        )
             per_groups.append(hits)
             recall_budgets.append(recall_budget)
     finally:
@@ -1886,17 +1978,29 @@ def fts_search(
     attach_timing(
         out,
         timer,
-        scale={
-            "objects": objects_sum,
-            "contexts": len(entities),
-            "limit": limit,
-            "hits": len(items),
-        },
+        scale=_search_scale_inflight(
+            {
+                "objects": objects_sum,
+                "contexts": len(entities),
+                "limit": limit,
+                "hits": len(items),
+            }
+        ),
     )
     for rb in recall_budgets:
         rb.attach_flags(out)
+    if budget:
+        budget.attach(out)
     out["hint"] = bottleneck_hint(str(out.get("bottleneck") or ""))
-    if out.get("sql_recall_skipped") and not items:
+    if out.get("sql_recall_skipped") == "fts_no_hits" and not items:
+        out["next_tool"] = out.get("next_tool") or "find_methods"
+        skip_note = (
+            "sql_recall skipped (FTS empty, CamelCase identifier); "
+            "try find_methods or search_under with path_prefix"
+        )
+        base = str(out.get("hint") or "").strip()
+        out["hint"] = f"{base}; {skip_note}" if base else skip_note
+    elif out.get("sql_recall_skipped") and not items:
         out["next_tool"] = out.get("next_tool") or "search_under"
         skip_note = (
             "sql_recall skipped unscoped mid-LIKE; "
@@ -2126,6 +2230,7 @@ def semantic_search(
     top_n: int = 20,
     path_prefix: str | None = None,
     compact: bool = False,
+    budget: ToolBudget | None = None,
 ) -> dict:
     timer = PhaseTimer()
     ref, tag, entities = resolve_context_group(context)
@@ -2146,6 +2251,7 @@ def semantic_search(
     recall_budgets: list[_SqlRecallBudget] = []
     fts_match = _fts_match_string(query)
     objects_sum = sum(int(e.get("object_count") or 0) for e in entities)
+    last_pf_meta: dict[str, Any] = {}
     conn = connect(settings.db_path)
     try:
         for entity in entities:
@@ -2154,40 +2260,50 @@ def semantic_search(
                 with timer.span("embed"):
                     vec_by_model[model] = client.embed([query], model, for_query=True)[0]
             vec = vec_by_model[model]
+            pf = PageFaultSpan()
             with timer.span("open_coll"):
-                coll = _open_collection(entity)
+                coll = _open_collection(entity, timer=timer)
             vq = zvec.Query(field_name="embedding", vector=vec)
             fq = zvec.Query(field_name="text", fts=zvec.Fts(match_string=fts_match))
+            zvec_kw = dict(
+                queries=[vq, fq],
+                topk=fetch_n,
+                reranker=zvec.RrfReRanker(rank_constant=60),
+                filter=_filter_expr(
+                    kind=None,
+                    include_borrowed=True,
+                    exclude_methods=not _bsl_enabled(entity),
+                ),
+                output_fields=["path", "kind", "belong", "name", "synonym"],
+            )
             try:
                 with timer.span("zvec"):
-                    docs = coll.query(
-                        queries=[vq, fq],
-                        topk=fetch_n,
-                        reranker=zvec.RrfReRanker(rank_constant=60),
-                        filter=_filter_expr(
-                            kind=None,
-                            include_borrowed=True,
-                            exclude_methods=not _bsl_enabled(entity),
-                        ),
-                        output_fields=["path", "kind", "belong", "name", "synonym"],
+                    docs = _zvec_query(
+                        coll,
+                        timeout_ms=budget.remaining_ms() if budget else None,
+                        **zvec_kw,
                     )
+            except ToolBudgetExceeded:
+                if budget:
+                    budget.mark_degraded("zvec_budget")
+                docs = []
             except Exception:
                 if fts_match != query:
                     fq = zvec.Query(field_name="text", fts=zvec.Fts(match_string=query))
+                    zvec_kw["queries"] = [vq, fq]
                     with timer.span("zvec"):
-                        docs = coll.query(
-                            queries=[vq, fq],
-                            topk=fetch_n,
-                            reranker=zvec.RrfReRanker(rank_constant=60),
-                            filter=_filter_expr(
-                                kind=None,
-                                include_borrowed=True,
-                                exclude_methods=not _bsl_enabled(entity),
-                            ),
-                            output_fields=["path", "kind", "belong", "name", "synonym"],
+                        docs = _zvec_query(
+                            coll,
+                            timeout_ms=budget.remaining_ms() if budget else None,
+                            **zvec_kw,
                         )
                 else:
                     raise
+            pf_meta = pf.finish()
+            zvec_sec = float(timer._phases.get("zvec") or 0)
+            slow_ms = int(settings.zvec_prewarm_on_slow_ms or 0)
+            if slow_ms > 0 and zvec_sec * 1000.0 >= slow_ms:
+                zvec_store.schedule_prewarm(collection_path(entity["id"], entity["model"]))
             hits = _dedupe_hits_by_path(
                 [_doc_hit(d, context_name=entity["name"]) for d in docs]
             )
@@ -2196,64 +2312,70 @@ def semantic_search(
             # Outer SQL_RECALL_SPAN_BUDGET_MS over class-C STEM_RECALL_BUDGET_MS
             # (nested, not a replacement). Separate budget-hit flags.
             recall_budget = _SqlRecallBudget()
-            with timer.span("sql_recall"):
-                # U41: skip unscoped token/report SQL when hybrid already has a
-                # content-covered root pool (howto/join) — that leg is the tax.
-                domains_pre = ranking_svc.query_domains(query)
-                skip_report_token = (
-                    ranking_svc.looks_like_budget_exec_intent(query)
-                    or "goods_return" in domains_pre
-                )
-                pool_strong = _pool_strong_for_token_sql(query, hits)
-                skip_token_sql = (
-                    (
-                        ranking_svc.looks_like_user_howto_query(query)
-                        or ranking_svc.looks_like_query_join_intent(query)
+            if _should_skip_sql_recall_no_fts(query, hits, prefix):
+                recall_budget.fts_no_hits_skipped = True
+            elif budget and budget.exhausted():
+                budget.mark_degraded("tool_budget")
+            else:
+                with timer.span("sql_recall"):
+                    # U41: skip unscoped token/report SQL when hybrid already has a
+                    # content-covered root pool (howto/join) — that leg is the tax.
+                    domains_pre = ranking_svc.query_domains(query)
+                    skip_report_token = (
+                        ranking_svc.looks_like_budget_exec_intent(query)
+                        or "goods_return" in domains_pre
                     )
-                    and _root_content_hits(query, hits)
-                    >= ranking_svc.MIN_STEM_ROOT_HITS
-                ) or pool_strong
-                if not skip_token_sql and not recall_budget.exhausted():
-                    hits = _merge_sql_hits(
-                        hits,
-                        _sql_token_hits(
+                    pool_strong = _pool_strong_for_token_sql(query, hits)
+                    skip_token_sql = (
+                        (
+                            ranking_svc.looks_like_user_howto_query(query)
+                            or ranking_svc.looks_like_query_join_intent(query)
+                        )
+                        and _root_content_hits(query, hits)
+                        >= ranking_svc.MIN_STEM_ROOT_HITS
+                    ) or pool_strong
+                    if not skip_token_sql and not recall_budget.exhausted():
+                        hits = _merge_sql_hits(
+                            hits,
+                            _sql_token_hits(
+                                conn,
+                                entity,
+                                query,
+                                kind=None,
+                                include_borrowed=True,
+                                limit=top_n,
+                                path_prefix=prefix,
+                                fts_hit_count=len(hits),
+                                pool_strong=pool_strong,
+                                budget=recall_budget,
+                                needs_report_roots=(
+                                    ranking_svc.looks_like_report_query(query)
+                                    and not skip_report_token
+                                    and not any(
+                                        str(h.get("kind") or "") == "Report"
+                                        and ranking_svc.is_root_object(h)
+                                        for h in hits
+                                    )
+                                    and not _report_recall_blocked(query, hits)
+                                ),
+                            ),
+                        )
+                    if not recall_budget.exhausted():
+                        if ranking_svc.looks_like_report_query(query):
+                            hits = ranking_svc.ensure_report_roots(hits)
+                        hits = _apply_howto_help_recall(
                             conn,
                             entity,
                             query,
-                            kind=None,
-                            include_borrowed=True,
-                            limit=top_n,
+                            hits,
                             path_prefix=prefix,
-                            fts_hit_count=len(hits),
-                            pool_strong=pool_strong,
+                            limit=top_n,
+                            stem_recall=True,
                             budget=recall_budget,
-                            needs_report_roots=(
-                                ranking_svc.looks_like_report_query(query)
-                                and not skip_report_token
-                                and not any(
-                                    str(h.get("kind") or "") == "Report"
-                                    and ranking_svc.is_root_object(h)
-                                    for h in hits
-                                )
-                                and not _report_recall_blocked(query, hits)
-                            ),
-                        ),
-                    )
-                if not recall_budget.exhausted():
-                    if ranking_svc.looks_like_report_query(query):
-                        hits = ranking_svc.ensure_report_roots(hits)
-                    hits = _apply_howto_help_recall(
-                        conn,
-                        entity,
-                        query,
-                        hits,
-                        path_prefix=prefix,
-                        limit=top_n,
-                        stem_recall=True,
-                        budget=recall_budget,
-                    )
+                        )
             per_groups.append(hits)
             recall_budgets.append(recall_budget)
+            last_pf_meta = pf_meta
     finally:
         conn.close()
 
@@ -2288,15 +2410,15 @@ def semantic_search(
     _attach_title_candidates(out, query, entities, path_prefix=prefix)
     _attach_skd_and_compare_hints(out, query, results)
     out = _compact_results(out, compact=compact)
-    snap = timer.snapshot(
-        scale={
-            "objects": objects_sum,
-            "contexts": len(entities),
-            "top_n": top_n,
-            "fetch_n": fetch_n,
-            "hits": len(results),
-        },
-    )
+    scale_base: dict[str, Any] = {
+        "objects": objects_sum,
+        "contexts": len(entities),
+        "top_n": top_n,
+        "fetch_n": fetch_n,
+        "hits": len(results),
+    }
+    scale_base.update(last_pf_meta)
+    snap = timer.snapshot(scale=_search_scale_inflight(scale_base))
     snap["hint"] = bottleneck_hint(str(snap.get("bottleneck") or ""))
     out["timing_ms"] = snap["timing_ms"]
     out["bottleneck"] = snap.get("bottleneck") or ""
@@ -2304,7 +2426,17 @@ def semantic_search(
     out["hint"] = snap.get("hint") or ""
     for rb in recall_budgets:
         rb.attach_flags(out)
-    if out.get("sql_recall_skipped") and not results:
+    if budget:
+        budget.attach(out)
+    if out.get("sql_recall_skipped") == "fts_no_hits" and not results:
+        out["next_tool"] = out.get("next_tool") or "find_methods"
+        skip_note = (
+            "sql_recall skipped (FTS empty, CamelCase identifier); "
+            "try find_methods or search_under with path_prefix"
+        )
+        base = str(out.get("hint") or "").strip()
+        out["hint"] = f"{base}; {skip_note}" if base else skip_note
+    elif out.get("sql_recall_skipped") and not results:
         out["next_tool"] = out.get("next_tool") or "search_under"
         skip_note = (
             "sql_recall skipped unscoped mid-LIKE; "
@@ -3595,24 +3727,92 @@ def _fuzzy_methods(
     export_only: bool,
     limit: int,
     timer: PhaseTimer | None = None,
+    budget: ToolBudget | None = None,
+    scale: dict[str, Any] | None = None,
 ) -> list[dict]:
     """Семантический поиск методов (zvec + RRF), только Procedure/Function.
 
     When ``parent_path`` is set: push path prefix into the zvec filter and
     drop off-parent hits *before* any SQLite props load. Loading ``props_json``
     via unscoped ``path IN`` was ~40–90s on ERP (batch 2026-08-17).
+
+    Small parent (``n <= parent_sql_max_candidates``): SQL load + lexical rank, no zvec.
+    When ``n`` exceeds cap: lexical probe on cap rows; if probe yields >= limit hits,
+    parent_sql on cap rows; else zvec RRF (semantic).
     """
     t = timer or PhaseTimer()
+    scale = scale if scale is not None else {}
     parent = (parent_path or "").strip().rstrip(".") or None
+    topk_raw = max(limit * 2, 24) if parent else max(limit * 3, 40)
+    topk = topk_raw
+    n_under = 0
+    parent_sql_max = _parent_sql_fuzzy_max_candidates()
+
+    def _parent_sql_ranked(load_limit: int) -> list[dict]:
+        with t.span("parent_sql"):
+            items = method_repo.list_methods(
+                conn,
+                int(entity["id"]),
+                parent_path=parent,
+                export_only=export_only,
+                limit=load_limit,
+            )
+            ranked = method_repo.rank_methods_lexical(items, query, limit=limit)
+        scale["fuzzy_path"] = "parent_sql"
+        return _methods_from_parent_sql_ranked(ranked, parent=parent)
+
+    if parent:
+        n_under = method_repo.count_methods_under_parent(conn, int(entity["id"]), parent)
+        scale["candidates_under_parent"] = n_under
+        scale["parent_sql_max_candidates"] = parent_sql_max
+        if n_under > 0:
+            topk = max(1, min(topk_raw, n_under))
+            scale["filter_selectivity"] = round(min(1.0, topk / n_under), 4)
+        scale["topk_requested"] = topk
+
+        if 0 < n_under <= parent_sql_max:
+            return _parent_sql_ranked(n_under)
+
+        if n_under > parent_sql_max:
+            with t.span("parent_sql_probe"):
+                probe_items = method_repo.list_methods(
+                    conn,
+                    int(entity["id"]),
+                    parent_path=parent,
+                    export_only=export_only,
+                    limit=parent_sql_max,
+                )
+                probe_ranked = method_repo.rank_methods_lexical(
+                    probe_items, query, limit=limit
+                )
+            probe_hits = len(probe_ranked)
+            scale["lexical_probe_hits"] = probe_hits
+            if probe_hits >= limit:
+                return _parent_sql_ranked(parent_sql_max)
+            scale["fuzzy_path"] = "zvec"
+
+    if budget and budget.exhausted():
+        raise ToolBudgetExceeded("tool_budget")
+
+    pf = PageFaultSpan()
     with t.span("open_coll"):
-        coll = _open_collection(entity)
+        coll = _open_collection(entity, timer=t)
+    if budget and budget.exhausted():
+        raise ToolBudgetExceeded("tool_budget")
+
     client = EmbeddingClient()
     with t.span("embed"):
         vec = client.embed([query], entity["model"], for_query=True)[0]
+    if budget and budget.exhausted():
+        raise ToolBudgetExceeded("tool_budget")
+
     vq = zvec.Query(field_name="embedding", vector=vec)
     fq = zvec.Query(field_name="text", fts=zvec.Fts(match_string=_fts_match_string(query)))
-    # Methods-only filter + smaller topk: avoid scanning whole metadata collection.
-    topk = max(limit * 2, 24) if parent else max(limit * 3, 40)
+    scale.setdefault("fuzzy_path", "zvec")
+    scale.setdefault("topk_requested", topk)
+    prewarm_snap = zvec_store.snapshot_prewarm(collection_path(entity["id"], entity["model"]))
+    if prewarm_snap:
+        scale.update(prewarm_snap)
     with t.span("zvec"):
         filt = _filter_expr(
             kind=None,
@@ -3621,13 +3821,17 @@ def _fuzzy_methods(
             path_prefix=parent,
         )
         try:
-            docs = coll.query(
+            docs = _zvec_query(
+                coll,
+                timeout_ms=budget.remaining_ms() if budget else None,
                 queries=[vq, fq],
                 topk=topk,
                 reranker=zvec.RrfReRanker(rank_constant=60),
                 filter=filt,
                 output_fields=["path", "kind", "belong", "name", "synonym"],
             )
+        except ToolBudgetExceeded:
+            raise
         except Exception as exc:
             # Do not retry unscoped: parent filter fail + full methods hybrid
             # was ~6.6s on ERP (find_methods 2026-08-18). Unscoped still
@@ -3641,6 +3845,11 @@ def _fuzzy_methods(
                 )
                 raise ZvecFilterFailed(parent, exc) from exc
             raise
+    scale.update(pf.finish())
+    zvec_sec = float(t._phases.get("zvec") or 0)
+    slow_ms = int(settings.zvec_prewarm_on_slow_ms or 0)
+    if slow_ms > 0 and zvec_sec * 1000.0 >= slow_ms:
+        zvec_store.schedule_prewarm(collection_path(entity["id"], entity["model"]))
     hits = _dedupe_hits_by_path([_doc_hit(d, context_name=entity["name"]) for d in docs])
     method_hits = [h for h in hits if h.get("kind") in {"Procedure", "Function"}]
     if parent:
@@ -3715,6 +3924,7 @@ def find_methods(
     export_only: bool = False,
     limit: int = 50,
     literal: bool = False,
+    budget: ToolBudget | None = None,
 ) -> dict:
     """Методы: exact (SQL по имени/пути/сигнатуре) → fuzzy только при необходимости.
 
@@ -3875,12 +4085,14 @@ def find_methods(
                 export_only=export_only,
                 limit=limit,
             )
-        scale = {
-            "objects": int(entity.get("object_count") or 0),
-            "methods": int(entity.get("bsl_method_count") or 0),
-            "limit": limit,
-            "exact_hits": len(exact),
-        }
+        scale = _search_scale_inflight(
+            {
+                "objects": int(entity.get("object_count") or 0),
+                "methods": int(entity.get("bsl_method_count") or 0),
+                "limit": limit,
+                "exact_hits": len(exact),
+            }
+        )
 
         def _done(payload: dict, *, match_mode: str) -> dict:
             attach_timing(payload, timer, scale={**scale, "match_mode": match_mode})
@@ -3892,9 +4104,23 @@ def find_methods(
             if err:
                 hint = f"{hint}; {err}" if hint else err
             payload["hint"] = hint
+            if budget:
+                budget.attach(payload)
             return payload
 
         if not _should_fuzzy_methods(query, len(exact)):
+            return _done(
+                {
+                    "context": entity["name"],
+                    "query": query,
+                    "match_mode": "exact",
+                    "total": len(exact),
+                    "methods": exact,
+                },
+                match_mode="exact",
+            )
+        if budget and budget.exhausted():
+            budget.mark_degraded("tool_budget")
             return _done(
                 {
                     "context": entity["name"],
@@ -3914,6 +4140,22 @@ def find_methods(
                 export_only=export_only,
                 limit=limit,
                 timer=timer,
+                budget=budget,
+                scale=scale,
+            )
+        except ToolBudgetExceeded as exc:
+            if budget:
+                budget.mark_degraded(str(exc.reason or "zvec_budget"))
+            return _done(
+                {
+                    "context": entity["name"],
+                    "query": query,
+                    "match_mode": "exact",
+                    "total": len(exact),
+                    "methods": exact,
+                    "fuzzy_error": str(exc.reason or "zvec_budget"),
+                },
+                match_mode="exact",
             )
         except ZvecFilterFailed as exc:
             return _done(

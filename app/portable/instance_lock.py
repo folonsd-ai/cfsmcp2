@@ -6,12 +6,32 @@ import os
 from pathlib import Path
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 class LauncherInstanceLock:
     def __init__(self, root_dir: Path) -> None:
         self.lock_path = root_dir / "data" / ".launcher.lock"
         self._fh = None
 
-    def acquire(self) -> bool:
+    def _lock_holder_pid(self) -> int | None:
+        try:
+            if self.lock_path.is_file():
+                text = self.lock_path.read_text(encoding="utf-8").strip()
+                if text.isdigit():
+                    return int(text)
+        except OSError:
+            pass
+        return None
+
+    def _try_acquire(self) -> bool:
         try:
             self.lock_path.parent.mkdir(parents=True, exist_ok=True)
             self._fh = open(self.lock_path, "a+")
@@ -37,6 +57,18 @@ class LauncherInstanceLock:
                     pass
                 self._fh = None
             return False
+
+    def acquire(self) -> bool:
+        if self._try_acquire():
+            return True
+        holder = self._lock_holder_pid()
+        if holder is not None and not _pid_alive(holder):
+            try:
+                self.lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return self._try_acquire()
+        return False
 
     def release(self) -> None:
         if self._fh is None:

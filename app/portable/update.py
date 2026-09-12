@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,8 @@ TAGS_API = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
 GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "cfsmcp2-portable"}
 PRESERVE_NAMES = frozenset({"data", "_updates", "cfsmcp2.ini"})
 UPDATE_HELPER_NAMES = frozenset({"apply-update.ps1", "update-portable.ps1", "update-portable.cmd"})
+APPLY_LOCK_NAME = ".apply-in-progress"
+APPLY_LOCK_MAX_AGE_SEC = 600.0
 
 
 @dataclass
@@ -190,14 +193,37 @@ def check_github_update(timeout: float = 20.0) -> UpdateInfo:
         )
 
 
-def download_update_zip(url: str, dest: Path, timeout: float = 300.0) -> Path:
+def download_update_zip(
+    url: str,
+    dest: Path,
+    timeout: float = 300.0,
+    progress_callback: Callable[[int, int | None], None] | None = None,
+) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
+            total_raw = resp.headers.get("Content-Length")
+            total = int(total_raw) if total_raw and total_raw.isdigit() else None
+            downloaded = 0
+            last_callback_at = 0.0
+            last_reported_pct = -1
             with dest.open("wb") as fh:
                 for chunk in resp.iter_bytes():
                     fh.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback is None:
+                        continue
+                    now = time.monotonic()
+                    if total:
+                        pct = int(downloaded * 100 / total)
+                        if pct != last_reported_pct or now - last_callback_at >= 0.2:
+                            progress_callback(downloaded, total)
+                            last_reported_pct = pct
+                            last_callback_at = now
+                    elif now - last_callback_at >= 0.2:
+                        progress_callback(downloaded, total)
+                        last_callback_at = now
     return dest
 
 
@@ -393,6 +419,65 @@ def pending_update_dir(install_root: Path, version: str) -> Path:
     return install_root / "_updates" / "pending" / safe
 
 
+def apply_lock_path(install_root: Path) -> Path:
+    return install_root / "_updates" / APPLY_LOCK_NAME
+
+
+def _read_lock_pid(path: Path) -> int | None:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        if text.isdigit():
+            return int(text)
+    except OSError:
+        pass
+    return None
+
+
+def apply_lock_stale(path: Path) -> bool:
+    try:
+        if not path.is_file():
+            return True
+    except OSError:
+        return True
+    pid = _read_lock_pid(path)
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+            return False
+        except OSError:
+            return True
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return True
+    return age > APPLY_LOCK_MAX_AGE_SEC
+
+
+def try_begin_apply(install_root: Path) -> bool:
+    """Exclusive lock: only one apply-update at a time per install dir."""
+    lock = apply_lock_path(install_root)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    if lock.is_file() and not apply_lock_stale(lock):
+        return False
+    try:
+        lock.unlink(missing_ok=True)
+    except OSError:
+        return False
+    try:
+        lock.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def end_apply(install_root: Path) -> None:
+    lock = apply_lock_path(install_root)
+    try:
+        lock.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def find_pending_staging(install_root: Path) -> Path | None:
     pending = install_root / "_updates" / "pending"
     if not pending.is_dir():
@@ -416,12 +501,21 @@ def apply_pending_update_if_any(install_root: Path, wait_pid: int = 0) -> bool:
     staging = find_pending_staging(install_root)
     if staging is None:
         return False
-    if os.name == "nt":
-        spawn_windows_update_apply(staging, install_root, wait_pid)
+    if not try_begin_apply(install_root):
+        return False
+    try:
+        if os.name == "nt":
+            spawn_windows_update_apply(staging, install_root, wait_pid)
+            return True
+        apply_portable_update(staging, install_root)
+        cleanup_pending_staging(staging, install_root)
         return True
-    apply_portable_update(staging, install_root)
-    cleanup_pending_staging(staging, install_root)
-    return True
+    except Exception:
+        end_apply(install_root)
+        raise
+    finally:
+        if os.name != "nt":
+            end_apply(install_root)
 
 
 def cleanup_pending_staging(source: Path, install_root: Path) -> None:

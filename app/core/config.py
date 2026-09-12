@@ -52,6 +52,23 @@ class Settings(BaseSettings):
     search_default_limit: int = 50
     search_max_limit: int = 200
 
+    # find_methods parent_sql: lexical path when candidates_under_parent <= this
+    # absolute cap (independent of request limit). When n exceeds cap, a lexical
+    # probe on this many rows must yield >= limit hits before parent_sql is used.
+    fuzzy_parent_sql_max_candidates: int = 400
+    # zvec collection open / query tuning
+    zvec_enable_mmap: bool = True
+    zvec_prewarm_enabled: bool = True
+    zvec_prewarm_block_mb: int = 8
+    # Re-prewarm embedding index after a slow zvec span (ms); 0 = disabled.
+    zvec_prewarm_on_slow_ms: int = 5000
+    # MCP tool wall-clock budgets (ms); 0 = disabled. Defaults are preliminary until E5.
+    mcp_find_methods_budget_ms: int = 180_000
+    mcp_search_metadata_budget_ms: int = 120_000
+    mcp_semantic_search_budget_ms: int = 120_000
+    # app_log tier=critical above this duration (ms).
+    mcp_critical_tier_ms: int = 30_000
+
     @field_validator("path_allowed_roots", "mount_points", mode="before")
     @classmethod
     def _parse_path_list(cls, v):

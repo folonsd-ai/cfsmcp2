@@ -89,8 +89,19 @@ function Invoke-CopyWithRetry {
     }
 }
 
+$ApplyLock = Join-Path $Target "_updates\.apply-in-progress"
+
+function Remove-ApplyLock {
+    if (Test-Path -LiteralPath $ApplyLock) {
+        Remove-Item -LiteralPath $ApplyLock -Force -ErrorAction SilentlyContinue
+    }
+}
+
 try {
     Write-Log "apply-update start Source=$Source Target=$Target WaitPid=$WaitPid"
+
+    New-Item -ItemType Directory -Force -Path (Join-Path $Target "_updates") | Out-Null
+    Set-Content -LiteralPath $ApplyLock -Value $PID -Encoding ASCII -NoNewline
 
     Wait-ProcessExit -Pid $WaitPid
 
@@ -144,4 +155,7 @@ try {
 catch {
     Write-Log "apply-update failed: $($_.Exception.Message)"
     throw
+}
+finally {
+    Remove-ApplyLock
 }

@@ -200,6 +200,11 @@ def snapshot(*, recent_window_sec: float = 60.0) -> dict[str, Any]:
     }
 
 
+def inflight_count() -> int:
+    with _lock:
+        return len(_inflight)
+
+
 def reset_for_tests() -> None:
     """Clear registry (unit tests only)."""
     with _lock:

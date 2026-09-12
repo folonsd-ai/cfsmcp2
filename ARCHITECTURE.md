@@ -1,6 +1,6 @@
 # ARCHITECTURE — cfsmcp2
 
-Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.28**
+Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.30**
 
 ---
 
@@ -30,7 +30,7 @@
 │  Browser UI (index.html, i18n.js, ide-console.css, JSZip, Chart.js) │
 │  GET /  ·  /static/                                         │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI (app/main.py)  version 0.2.28                      │
+│  FastAPI (app/main.py)  version 0.2.30                      │
 │  /api/*  ·  /mcp/  (Streamable HTTP, FastMCP)               │
 ├──────────────┬──────────────────────┬───────────────────────┤
 │  SQLite      │  zvec (per entity)   │  LM Studio :1234      │
@@ -183,6 +183,8 @@ merge / delete orphans → parsed → reindex
 
 - Эмбеддинги через LM Studio; batch/workers из settings (workers 1/2/4/8/12/16).
 - zvec: FTS + HNSW cosine; коллекция `data/zvec/e{id}__{model}`; запись батчами ≤1000 docs.
+- **Query-time zvec:** `CollectionOption` — только `read_only` и `enable_mmap` (readahead/preload в API нет). Рычаги ускорения холодного hybrid: фоновый **prefault** `embedding.index*.proxima` (`ZVEC_PREWARM_*`), опционально `ZVEC_ENABLE_MMAP=false` (A/B), структурный **split** коллекции метаданные/методы (reindex).
+- **find_methods fuzzy + parent_path:** при `candidates_under_parent <= fuzzy_parent_sql_max_candidates` (абс. порог, default 400) — `fuzzy_path=parent_sql`; при большем `n` — lexical probe на cap строк: `probe_hits >= limit` → parent_sql, иначе zvec (RRF). Поля `scale`: `parent_sql_max_candidates`, `lexical_probe_hits`, `prewarm_*`. Селективный path-filter в `coll.query` дорог; wide без parent — десятки ms.
 - Incremental merge; overlap LM embed волны N+1 с записью zvec волны N; `bsl_embed_gen` для повторного embed методов.
 - При сбое — fallback full rebuild; после рестарта процесса — resume оставшихся `embed_done=0`.
 - `bsl_embed_mode`: `meta` / `body` / `chunks` (при `signatures` / `signatures_only` → всегда `meta`).

@@ -18,6 +18,9 @@ class PortableIni:
     port: int = DEFAULT_PORT
     lm_studio_url: str = "http://127.0.0.1:1234"
     minimize_to_tray: bool = True
+    tray_hint_shown: bool = False
+    first_run_hint_shown: bool = False
+    autostart_server: bool = False
 
 
 def is_network_bind(host: str) -> bool:
@@ -59,6 +62,9 @@ def load_portable_ini(path: Path) -> PortableIni:
     if parser.has_section("launcher"):
         sec = parser["launcher"]
         cfg.minimize_to_tray = _parse_bool(sec.get("minimize_to_tray"), cfg.minimize_to_tray)
+        cfg.tray_hint_shown = _parse_bool(sec.get("tray_hint_shown"), cfg.tray_hint_shown)
+        cfg.first_run_hint_shown = _parse_bool(sec.get("first_run_hint_shown"), cfg.first_run_hint_shown)
+        cfg.autostart_server = _parse_bool(sec.get("autostart_server"), cfg.autostart_server)
     return cfg
 
 
@@ -66,7 +72,12 @@ def save_portable_ini(path: Path, cfg: PortableIni) -> None:
     parser = configparser.ConfigParser()
     parser["server"] = {"host": cfg.host, "port": str(cfg.port)}
     parser["embeddings"] = {"lm_studio_url": cfg.lm_studio_url}
-    parser["launcher"] = {"minimize_to_tray": "true" if cfg.minimize_to_tray else "false"}
+    parser["launcher"] = {
+        "minimize_to_tray": "true" if cfg.minimize_to_tray else "false",
+        "tray_hint_shown": "true" if cfg.tray_hint_shown else "false",
+        "first_run_hint_shown": "true" if cfg.first_run_hint_shown else "false",
+        "autostart_server": "true" if cfg.autostart_server else "false",
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         parser.write(fh)

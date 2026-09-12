@@ -106,6 +106,19 @@ mcp = FastMCP(
 )
 
 
+def _tool_budget(tool_name: str):
+    from app.services.tool_budget import ToolBudget
+
+    ms = 0
+    if tool_name == "find_methods":
+        ms = int(settings.mcp_find_methods_budget_ms or 0)
+    elif tool_name == "search_metadata":
+        ms = int(settings.mcp_search_metadata_budget_ms or 0)
+    elif tool_name == "semantic_search":
+        ms = int(settings.mcp_semantic_search_budget_ms or 0)
+    return ToolBudget(ms) if ms > 0 else None
+
+
 def _track(tool_name: str, fn, *, context: str = "", **tool_args):
     from app.services import mcp_busy
 
@@ -309,6 +322,7 @@ def search_metadata(
                 path_prefix=path_prefix,
                 compact=compact,
                 literal=literal,
+                budget=_tool_budget("search_metadata"),
             )
         except Exception as exc:
             return {"error": str(exc)}
@@ -411,6 +425,7 @@ def semantic_search(
                 top_n=top_n,
                 path_prefix=path_prefix,
                 compact=compact,
+                budget=_tool_budget("semantic_search"),
             )
         except Exception as exc:
             return {"error": str(exc)}
@@ -1017,6 +1032,7 @@ def find_methods(
                 export_only=export_only,
                 limit=limit,
                 literal=literal,
+                budget=_tool_budget("find_methods"),
             )
         except Exception as exc:
             return {"error": str(exc)}

@@ -22,7 +22,7 @@ DEFAULT_RETAIN_DAYS = 14
 DEFAULT_MAX_ROWS = 5000
 MIN_SLOW_MS = 500
 MAX_SLOW_MS = 60_000
-PERSIST_TIERS = frozenset({"error", "slow", "info"})
+PERSIST_TIERS = frozenset({"error", "slow", "critical", "info"})
 MIN_RETAIN_DAYS = 1
 MAX_RETAIN_DAYS = 90
 MIN_MAX_ROWS = 100
@@ -102,6 +102,8 @@ def summarize_result(value: Any, *, limit: int = MAX_RESULT_SUMMARY_CHARS) -> st
                         "sql_recall_budget_hit",
                         "stem_recall_budget_hit",
                         "sql_recall_skipped",
+                        "degraded",
+                        "degraded_reason",
                         "next_tool",
                     )
                     if k in value
@@ -365,6 +367,26 @@ def append_slow(
     )
 
 
+def append_critical(
+    *,
+    kind: str,
+    name: str,
+    duration_ms: float,
+    context: str = "",
+    detail: str = "",
+    ok: bool = True,
+) -> None:
+    append(
+        tier="critical",
+        kind=kind,
+        name=name,
+        ok=ok,
+        duration_ms=duration_ms,
+        context=context,
+        detail=detail or f"{duration_ms:.0f}ms",
+    )
+
+
 def append_info(
     *,
     kind: str,
@@ -400,7 +422,23 @@ def maybe_slow(
         threshold = runtime_settings.get_slow_request_ms()
     except Exception:
         threshold = DEFAULT_SLOW_MS
-    if float(duration_ms or 0) >= float(threshold):
+    try:
+        from app.core.config import settings as cfg
+
+        critical_ms = float(cfg.mcp_critical_tier_ms or 30_000)
+    except Exception:
+        critical_ms = 30_000
+    ms = float(duration_ms or 0)
+    if ms >= critical_ms:
+        append_critical(
+            kind=kind,
+            name=name,
+            duration_ms=duration_ms,
+            context=context,
+            detail=detail,
+            ok=ok,
+        )
+    elif ms >= float(threshold):
         append_slow(
             kind=kind,
             name=name,
