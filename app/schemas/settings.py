@@ -55,6 +55,7 @@ class SettingsOut(BaseModel):
     bsl_embed_limits_defaults: BslEmbedLimitsDefaults | None = None
     bsl_embed_limits_bounds: BslEmbedLimitsBounds | None = None
     bsl_embed_window_presets: list[BslEmbedWindowPreset] | None = None
+    embed_model_window_presets: dict[str, str] | None = None
 
 
 class SettingsPatch(BaseModel):
@@ -143,6 +144,9 @@ class VacuumResponse(BaseModel):
     after_bytes: int
     db_path: str
     detail: str = ""
+    zvec_before_bytes: int = 0
+    zvec_after_bytes: int = 0
+    zvec_removed: int = 0
 
 
 class DbInfoOut(BaseModel):

@@ -13,6 +13,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 .venv/
+.venv-portable/
 venv/
 .pytest_cache/
 .mypy_cache/

@@ -1,6 +1,6 @@
 [project]
 name = "cfsmcp2"
-version = "0.2.22"
+version = "0.2.28"
 description = "MCP server and UI for 1C metadata and BSL search"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.13"
@@ -14,8 +14,16 @@ dependencies = [
     "pydantic-settings>=2.0",
 ]
 
+[project.optional-dependencies]
+portable = [
+    "pyinstaller>=6.0",
+    "pystray>=0.19",
+    "pillow>=10.0",
+]
+
 [project.scripts]
 cfsmcp2 = "app.main:run"
+cfsmcp2-launcher = "app.portable.launcher:main"
 
 [tool.fastapi]
 entrypoint = "app.main:app"

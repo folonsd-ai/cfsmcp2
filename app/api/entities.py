@@ -850,7 +850,7 @@ def patch_entity(entity_id: int, body: EntityPatch) -> EntityOut:
             if raw and not normalize_embed_window_preset(raw):
                 raise HTTPException(
                     400,
-                    "embed_window_preset must be one of the known window presets (e.g. 256, 512)",
+                    "embed_window_preset must be one of the known window presets (e.g. 512, 768)",
                 )
             cur = str(row.get("embed_window_preset") or "").strip()
             if raw != cur:
@@ -942,6 +942,7 @@ def delete_entity(entity_id: int) -> StreamingResponse:
                 yield _emit(0, "error", "Entity not found")
                 return
             name = row["name"] or f"#{entity_id}"
+            jobs.cancel_entity(entity_id)
             yield _emit(5, "prepare", name)
 
             coll = collection_path(row["id"], row["model"])

@@ -2,8 +2,14 @@ import re
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from app.core.paths import default_data_dir
+
+
+def _data_subdir(name: str) -> Path:
+    return default_data_dir() / name
 
 
 class Settings(BaseSettings):
@@ -11,10 +17,10 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8559
-    metadata_dir: Path = Path("./data/metadata")
-    dumps_dir: Path = Path("./data/dumps")
-    db_path: Path = Path("./data/cfsmcp2.sqlite3")
-    zvec_dir: Path = Path("./data/zvec")
+    metadata_dir: Path = Field(default_factory=lambda: _data_subdir("metadata"))
+    dumps_dir: Path = Field(default_factory=lambda: _data_subdir("dumps"))
+    db_path: Path = Field(default_factory=lambda: _data_subdir("cfsmcp2.sqlite3"))
+    zvec_dir: Path = Field(default_factory=lambda: _data_subdir("zvec"))
     # Разрешённые корни для source_location=path (import-path, этап 2.5).
     # Пустой список = ограничений нет (логируется warning на каждый import-path).
     # В env PATH_ALLOWED_ROOTS корни разделяются запятой и/или точкой с запятой.
