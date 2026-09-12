@@ -23,6 +23,7 @@ LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 TAGS_API = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
 GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "cfsmcp2-portable"}
 PRESERVE_NAMES = frozenset({"data", "_updates", "cfsmcp2.ini"})
+UPDATE_HELPER_NAMES = frozenset({"apply-update.ps1", "update-portable.ps1", "update-portable.cmd"})
 
 
 @dataclass
@@ -259,29 +260,41 @@ def _ensure_windows_update_script(install_root: Path) -> Path:
 
 
 def prepare_update_helper(install_root: Path, staging: Path | None = None) -> None:
-    """Copy update scripts to install dir (safe while launcher is running)."""
+    """Copy update scripts to _updates/ only (not install root)."""
     if os.name != "nt":
         return
     _ensure_windows_update_script(install_root)
     updates_dir = install_root / "_updates"
-    for name in ("update-portable.ps1", "update-portable.cmd", "apply-update.ps1"):
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    for name in UPDATE_HELPER_NAMES:
         try:
             template = _asset_template(name)
         except FileNotFoundError:
-            continue
-        content = template.read_text(encoding="utf-8")
-        for dest in (install_root / name, updates_dir / name):
-            if dest.parent != install_root and name == "apply-update.ps1":
+            if staging is not None:
+                staged = staging / name
+                if staged.is_file():
+                    template = staged
+                elif (staging / "_updates" / name).is_file():
+                    template = staging / "_updates" / name
+                else:
+                    continue
+            else:
                 continue
-            if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
-                dest.write_text(content, encoding="utf-8")
-    if staging is not None:
-        staging_script = staging / "apply-update.ps1"
-        if staging_script.is_file():
-            helper = install_root / "apply-update.ps1"
-            content = staging_script.read_text(encoding="utf-8")
-            if not helper.is_file() or helper.read_text(encoding="utf-8") != content:
-                helper.write_text(content, encoding="utf-8")
+        content = template.read_text(encoding="utf-8")
+        dest = updates_dir / name
+        if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
+            dest.write_text(content, encoding="utf-8")
+    cleanup_update_helpers_from_root(install_root)
+
+
+def cleanup_update_helpers_from_root(install_root: Path) -> None:
+    for name in UPDATE_HELPER_NAMES:
+        path = install_root / name
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def find_staging_updater_exe(source: Path, install_exe: Path) -> Path | None:
@@ -351,8 +364,9 @@ def apply_portable_update(source_root: Path, install_root: Path) -> None:
     if not (source_root / "cfsmcp2.exe").is_file():
         raise ValueError(f"Источник обновления не содержит cfsmcp2.exe: {source_root}")
     install_root.mkdir(parents=True, exist_ok=True)
+    skip = PRESERVE_NAMES | UPDATE_HELPER_NAMES
     for item in source_root.iterdir():
-        if item.name in PRESERVE_NAMES:
+        if item.name in skip:
             continue
         dest = install_root / item.name
         if item.is_dir():

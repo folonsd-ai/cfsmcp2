@@ -678,7 +678,7 @@ class PortableLauncher:
             if os.name == "nt":
                 hint = (
                     "\n\nЕсли авто-перезапуск не сработает: закройте cfsmcp2 "
-                    "и запустите update-portable.cmd из каталога установки."
+                    "и запустите _updates\\update-portable.cmd."
                 )
             messagebox.showinfo(
                 "Обновление",

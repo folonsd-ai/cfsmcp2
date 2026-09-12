@@ -100,7 +100,7 @@ try {
     }
     Wait-TargetUnlocked -ExePath $exePath
 
-    $preserve = @("data", "_updates", "cfsmcp2.ini")
+    $preserve = @("data", "_updates", "cfsmcp2.ini", "apply-update.ps1", "update-portable.ps1", "update-portable.cmd")
     Get-ChildItem -LiteralPath $Source | ForEach-Object {
         if ($preserve -contains $_.Name) {
             return
@@ -121,6 +121,20 @@ try {
     if ($StagingVersionDir -and (Test-Path -LiteralPath $StagingVersionDir)) {
         Write-Log "Cleanup staging: $StagingVersionDir"
         Remove-Item -LiteralPath $StagingVersionDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($legacy in @("apply-update.ps1", "update-portable.ps1", "update-portable.cmd")) {
+        $legacyPath = Join-Path $Target $legacy
+        if (Test-Path -LiteralPath $legacyPath) {
+            Write-Log "Remove legacy helper from install root: $legacy"
+            Remove-Item -LiteralPath $legacyPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $updatesDir = Join-Path $Target "_updates"
+    Get-ChildItem -LiteralPath $updatesDir -Filter "cfsmcp2-win-portable-v*.zip" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Log "Remove downloaded zip: $($_.Name)"
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
     }
 
     Write-Log "Starting $exePath"

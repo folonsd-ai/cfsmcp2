@@ -25,10 +25,12 @@ if (Test-Path $ZipPath) {
 }
 
 $Assets = Join-Path $Root "app\portable\assets"
+$UpdatesDir = Join-Path $Dist "_updates"
+New-Item -ItemType Directory -Force -Path $UpdatesDir | Out-Null
 foreach ($name in @("apply-update.ps1", "update-portable.ps1", "update-portable.cmd")) {
     $src = Join-Path $Assets $name
     if (Test-Path -LiteralPath $src) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $Dist $name) -Force
+        Copy-Item -LiteralPath $src -Destination (Join-Path $UpdatesDir $name) -Force
     }
 }
 
