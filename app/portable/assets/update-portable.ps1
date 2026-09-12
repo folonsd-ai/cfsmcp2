@@ -4,10 +4,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-InstallRoot {
+    param([string]$Start)
+    $dir = $Start.Trim().TrimEnd('\', '/')
+    if (-not $dir) {
+        throw "Install root path is empty"
+    }
+    while ($dir) {
+        if (Test-Path -LiteralPath (Join-Path $dir "cfsmcp2.exe")) {
+            return (Resolve-Path -LiteralPath $dir).Path
+        }
+        $parent = Split-Path -Parent $dir
+        if (-not $parent -or $parent -eq $dir) {
+            break
+        }
+        $dir = $parent
+    }
+    throw "Install root not found (no cfsmcp2.exe near $Start)"
+}
+
 if (-not $Target) {
     $Target = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
-$Target = (Resolve-Path -LiteralPath $Target).Path
+$Target = Resolve-InstallRoot -Start $Target
 
 function Find-StagingRoot {
     param([string]$InstallRoot)

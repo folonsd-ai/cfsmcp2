@@ -263,15 +263,18 @@ def prepare_update_helper(install_root: Path, staging: Path | None = None) -> No
     if os.name != "nt":
         return
     _ensure_windows_update_script(install_root)
+    updates_dir = install_root / "_updates"
     for name in ("update-portable.ps1", "update-portable.cmd", "apply-update.ps1"):
         try:
             template = _asset_template(name)
         except FileNotFoundError:
             continue
-        dest = install_root / name
         content = template.read_text(encoding="utf-8")
-        if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
-            dest.write_text(content, encoding="utf-8")
+        for dest in (install_root / name, updates_dir / name):
+            if dest.parent != install_root and name == "apply-update.ps1":
+                continue
+            if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
+                dest.write_text(content, encoding="utf-8")
     if staging is not None:
         staging_script = staging / "apply-update.ps1"
         if staging_script.is_file():

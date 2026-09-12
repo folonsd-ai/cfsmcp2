@@ -17,18 +17,18 @@ function Write-Log {
 }
 
 function Wait-ProcessExit {
-    param([int]$Pid)
-    if ($Pid -le 0) {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) {
         return
     }
-    Write-Log "Waiting for PID $Pid"
+    Write-Log "Waiting for PID $ProcessId"
     while ($true) {
         try {
-            Get-Process -Id $Pid -ErrorAction Stop | Out-Null
+            Get-Process -Id $ProcessId -ErrorAction Stop | Out-Null
             Start-Sleep -Milliseconds 250
         }
         catch {
-            Write-Log "PID $Pid exited"
+            Write-Log "PID $ProcessId exited"
             return
         }
     }
@@ -83,7 +83,7 @@ function Invoke-CopyWithRetry {
             if ($attempt -ge $MaxAttempts) {
                 throw
             }
-            Write-Log "Copy retry $attempt/$MaxAttempts: $From -> $To ($($_.Exception.Message))"
+            Write-Log "Copy retry ${attempt}/${MaxAttempts}: ${From} -> ${To} ($($_.Exception.Message))"
             Start-Sleep -Milliseconds 500
         }
     }
