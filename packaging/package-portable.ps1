@@ -24,6 +24,14 @@ if (Test-Path $ZipPath) {
     Remove-Item -LiteralPath $ZipPath -Force
 }
 
+$Assets = Join-Path $Root "app\portable\assets"
+foreach ($name in @("apply-update.ps1", "update-portable.ps1", "update-portable.cmd")) {
+    $src = Join-Path $Assets $name
+    if (Test-Path -LiteralPath $src) {
+        Copy-Item -LiteralPath $src -Destination (Join-Path $Dist $name) -Force
+    }
+}
+
 Compress-Archive -LiteralPath $Dist -DestinationPath $ZipPath -CompressionLevel Optimal
 
 Write-Host ""

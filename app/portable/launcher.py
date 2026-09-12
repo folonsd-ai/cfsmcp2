@@ -644,6 +644,10 @@ class PortableLauncher:
                 download_update_zip(info.download_url, zip_path)
                 self.root.after(0, lambda: self._set_install_status("Установка обновления…"))
                 staging_root = extract_portable_zip(zip_path, staging_dir)
+                if os.name == "nt":
+                    from app.portable.update import prepare_update_helper
+
+                    prepare_update_helper(self.root_dir, staging_root)
                 self.root.after(0, lambda: self._install_update_done(info, staging_root, None))
             except Exception as exc:
                 self.root.after(0, lambda: self._install_update_done(info, None, exc))
@@ -670,9 +674,16 @@ class PortableLauncher:
         if messagebox.askyesno("Обновление", msg):
             self._restart_for_update(staging_root)
         else:
+            hint = ""
+            if os.name == "nt":
+                hint = (
+                    "\n\nЕсли авто-перезапуск не сработает: закройте cfsmcp2 "
+                    "и запустите update-portable.cmd из каталога установки."
+                )
             messagebox.showinfo(
                 "Обновление",
-                "Перезапустите cfsmcp2 вручную — обновление будет завершено при запуске.",
+                "Перезапустите cfsmcp2 вручную — обновление будет завершено при запуске."
+                + hint,
             )
 
     def _restart_for_update(self, staging_root: Path) -> None:
@@ -685,11 +696,21 @@ class PortableLauncher:
         if self.instance_lock is not None:
             self.instance_lock.release()
             self.instance_lock = None
-        from app.portable.update import spawn_windows_update_apply
+        from app.portable.update import (
+            find_staging_updater_exe,
+            prepare_update_helper,
+            spawn_staging_apply_update,
+            spawn_windows_update_apply,
+        )
 
         try:
             if os.name == "nt":
-                spawn_windows_update_apply(staging_root, self.root_dir, os.getpid())
+                prepare_update_helper(self.root_dir, staging_root)
+                install_exe = Path(sys.executable)
+                if find_staging_updater_exe(staging_root, install_exe) is not None:
+                    spawn_staging_apply_update(staging_root, self.root_dir, os.getpid())
+                else:
+                    spawn_windows_update_apply(staging_root, self.root_dir, os.getpid())
             else:
                 exe = Path(sys.executable)
                 cmd = [

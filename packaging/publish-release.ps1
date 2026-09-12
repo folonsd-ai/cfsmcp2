@@ -83,8 +83,11 @@ Windows portable: cfsmcp2.exe + launcher (tray, auto-update).
 Скачайте ``cfsmcp2-win-portable-v$Version.zip``, распакуйте, запустите ``cfsmcp2.exe``.
 "@
 
+$NotesPath = Join-Path $Root "dist\.release-notes-$Version.md"
+[System.IO.File]::WriteAllText($NotesPath, $Notes, [System.Text.UTF8Encoding]::new($false))
+
 Write-Host "publish-release: creating $Tag ..."
-& gh release create $Tag $ZipPath --title $Version --notes $Notes
+& gh release create $Tag $ZipPath --title $Version --notes-file $NotesPath
 if ($LASTEXITCODE -ne 0) {
     throw "gh release create failed with exit code $LASTEXITCODE"
 }

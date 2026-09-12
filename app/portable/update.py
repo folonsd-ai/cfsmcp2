@@ -230,17 +230,21 @@ def _staging_version_dir(source: Path, install_root: Path) -> Path | None:
     return pending / rel.parts[0]
 
 
-def _windows_update_script_template() -> Path:
+def _asset_template(name: str) -> Path:
     here = Path(__file__).resolve().parent
-    bundled = here / "assets" / "apply-update.ps1"
+    bundled = here / "assets" / name
     if bundled.is_file():
         return bundled
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        frozen = Path(meipass) / "app" / "portable" / "assets" / "apply-update.ps1"
+        frozen = Path(meipass) / "app" / "portable" / "assets" / name
         if frozen.is_file():
             return frozen
-    raise FileNotFoundError("apply-update.ps1 not found in portable assets")
+    raise FileNotFoundError(f"{name} not found in portable assets")
+
+
+def _windows_update_script_template() -> Path:
+    return _asset_template("apply-update.ps1")
 
 
 def _ensure_windows_update_script(install_root: Path) -> Path:
@@ -252,6 +256,58 @@ def _ensure_windows_update_script(install_root: Path) -> Path:
     if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
         dest.write_text(content, encoding="utf-8")
     return dest
+
+
+def prepare_update_helper(install_root: Path, staging: Path | None = None) -> None:
+    """Copy update scripts to install dir (safe while launcher is running)."""
+    if os.name != "nt":
+        return
+    _ensure_windows_update_script(install_root)
+    for name in ("update-portable.ps1", "update-portable.cmd", "apply-update.ps1"):
+        try:
+            template = _asset_template(name)
+        except FileNotFoundError:
+            continue
+        dest = install_root / name
+        content = template.read_text(encoding="utf-8")
+        if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
+            dest.write_text(content, encoding="utf-8")
+    if staging is not None:
+        staging_script = staging / "apply-update.ps1"
+        if staging_script.is_file():
+            helper = install_root / "apply-update.ps1"
+            content = staging_script.read_text(encoding="utf-8")
+            if not helper.is_file() or helper.read_text(encoding="utf-8") != content:
+                helper.write_text(content, encoding="utf-8")
+
+
+def find_staging_updater_exe(source: Path, install_exe: Path) -> Path | None:
+    staging_exe = source / "cfsmcp2.exe"
+    if not staging_exe.is_file():
+        return None
+    try:
+        if staging_exe.resolve() == install_exe.resolve():
+            return None
+    except OSError:
+        return staging_exe
+    return staging_exe
+
+
+def spawn_staging_apply_update(source: Path, target: Path, wait_pid: int) -> None:
+    """Run --apply-update from staged build (works when install exe is older)."""
+    staging_exe = find_staging_updater_exe(source, Path(sys.executable))
+    if staging_exe is None:
+        raise FileNotFoundError("staged cfsmcp2.exe not found for bootstrap update")
+    prepare_update_helper(target, source)
+    flags = 0x08000000 if os.name == "nt" else 0
+    cmd = [
+        str(staging_exe),
+        "--apply-update",
+        f"--source={source}",
+        f"--target={target}",
+        f"--wait-pid={wait_pid}",
+    ]
+    subprocess.Popen(cmd, cwd=str(target), creationflags=flags)
 
 
 def spawn_windows_update_apply(source: Path, target: Path, wait_pid: int) -> None:

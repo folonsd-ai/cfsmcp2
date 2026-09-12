@@ -60,10 +60,12 @@ hiddenimports += _pydantic_core_hidden
 
 binaries = collect_dynamic_libs("zvec") + collect_dynamic_libs("pydantic_core") + _pydantic_core_binaries
 
-_apply_ps1 = os.path.join(repo_root, "app", "portable", "assets", "apply-update.ps1")
+_portable_assets = os.path.join(repo_root, "app", "portable", "assets")
 datas = [(os.path.join(repo_root, "app", "static"), "app/static")] + _pydantic_core_datas
-if os.path.isfile(_apply_ps1):
-    datas.append((_apply_ps1, "app/portable/assets"))
+for _asset_name in ("apply-update.ps1", "update-portable.ps1", "update-portable.cmd"):
+    _asset_path = os.path.join(_portable_assets, _asset_name)
+    if os.path.isfile(_asset_path):
+        datas.append((_asset_path, "app/portable/assets"))
 for _pkg in (
     "fastmcp",
     "fastmcp-slim",
