@@ -278,9 +278,14 @@ def db_info() -> DbInfoOut:
 
 @router.post("/vacuum")
 def vacuum_db() -> VacuumResponse:
-    """Compact SQLite (VACUUM) after WAL checkpoint. Prefer when UI is idle."""
+    """Drop unused zvec indexes, then compact SQLite (VACUUM). Prefer when UI is idle."""
+    from app.services.pipeline import cleanup_unused_zvec_indexes
+
     db = Path(settings.db_path)
+    zvec_dir = Path(settings.zvec_dir)
     before = db.stat().st_size if db.exists() else 0
+    zvec_before = _dir_size(zvec_dir)
+    zvec_stats = {"removed": 0, "freed_bytes": 0}
     conn = connect(settings.db_path)
     try:
         busy = conn.execute(
@@ -291,6 +296,7 @@ def vacuum_db() -> VacuumResponse:
         ).fetchone()
         if int(busy["n"] or 0):
             raise HTTPException(409, "VACUUM blocked: parse or index is running")
+        zvec_stats = cleanup_unused_zvec_indexes(conn=conn)
         # VACUUM cannot run inside an open transaction
         conn.commit()
         try:
@@ -307,11 +313,28 @@ def vacuum_db() -> VacuumResponse:
     finally:
         conn.close()
     after = db.stat().st_size if db.exists() else 0
-    saved = max(0, before - after)
+    zvec_after = _dir_size(zvec_dir)
+    db_saved = max(0, before - after)
+    zvec_saved = max(0, zvec_before - zvec_after)
+    parts: list[str] = []
+    if db_saved:
+        parts.append(f"SQLite −{db_saved} B")
+    elif before != after:
+        parts.append("SQLite: без изменения размера")
+    removed = int(zvec_stats.get("removed") or 0)
+    if removed:
+        parts.append(f"zvec: удалено {removed}, −{zvec_saved or int(zvec_stats.get('freed_bytes') or 0)} B")
+    elif zvec_saved:
+        parts.append(f"zvec −{zvec_saved} B")
+    else:
+        parts.append("zvec: неиспользуемых индексов нет")
     return VacuumResponse(
         ok=True,
         before_bytes=before,
         after_bytes=after,
         db_path=str(db),
-        detail=f"freed {saved} bytes" if saved else "no size change",
+        detail="; ".join(parts),
+        zvec_before_bytes=zvec_before,
+        zvec_after_bytes=zvec_after,
+        zvec_removed=removed,
     )

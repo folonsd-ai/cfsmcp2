@@ -48,9 +48,37 @@ _TEMP_MODULES_ENTITY_RE = re.compile(r"^\.modules_(\d+)_[0-9a-f]+\.zip$", re.I)
 _ENTITY_REPORT_RE = re.compile(r"^e(\d+)\.txt$", re.I)
 _PENDING_BSL_RE = re.compile(r"^e(\d+)\.bsl\.pending\.zip$", re.I)
 _DUMP_AUDIT_RE = re.compile(r"^e(\d+)\.dump\.audit\.jsonl$", re.I)
+_ENTITY_ZVEC_DIR_RE = re.compile(r"^e(\d+)__(.+)$", re.I)
 
 # Ignore in-flight uploads younger than this (seconds) on startup sweep.
 _METADATA_TEMP_GRACE_SEC = 3600.0
+
+
+class EntityAborted(Exception):
+    """Entity was deleted or its background job was cancelled."""
+
+    def __init__(self, entity_id: int) -> None:
+        self.entity_id = int(entity_id)
+        super().__init__(f"entity {entity_id} removed or cancelled")
+
+
+def _entity_stopped(entity_id: int, conn=None) -> bool:
+    from app.services import jobs
+
+    if jobs.is_cancelled(entity_id):
+        return True
+    if conn is not None:
+        return ent_repo.get_entity(conn, entity_id) is None
+    check = connect(settings.db_path)
+    try:
+        return ent_repo.get_entity(check, entity_id) is None
+    finally:
+        check.close()
+
+
+def _abort_if_entity_stopped(entity_id: int, conn=None) -> None:
+    if _entity_stopped(entity_id, conn):
+        raise EntityAborted(entity_id)
 
 
 class _PhaseTimer:
@@ -486,6 +514,93 @@ def _close_collection(collection) -> None:
     except Exception:
         pass
     gc.collect()
+
+
+def _path_tree_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _zvec_entry_entity_id(name: str) -> int | None:
+    base = name
+    for suffix in (".__tmp__", ".tmp", ".bak"):
+        if base.lower().endswith(suffix.lower()):
+            base = base[: -len(suffix)]
+            break
+    m = _ENTITY_ZVEC_DIR_RE.match(base)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def cleanup_unused_zvec_indexes(*, conn=None) -> dict[str, int]:
+    """Remove zvec dirs for deleted entities and indexes from old embedding models."""
+    stats = {"scanned": 0, "removed": 0, "freed_bytes": 0, "kept": 0}
+    zdir = Path(settings.zvec_dir)
+    if not zdir.is_dir():
+        return stats
+
+    own_conn = conn is None
+    if own_conn:
+        conn = connect(settings.db_path)
+    try:
+        live_paths: set[Path] = set()
+        live_ids: set[int] = set()
+        for row in ent_repo.list_entities(conn):
+            eid = int(row["id"])
+            live_ids.add(eid)
+            model = str(row.get("model") or settings.default_embedding_model)
+            coll = collection_path(eid, model)
+            try:
+                live_paths.add(coll.resolve())
+            except OSError:
+                live_paths.add(coll)
+    finally:
+        if own_conn:
+            conn.close()
+
+    for entry in list(zdir.iterdir()):
+        stats["scanned"] += 1
+        name = entry.name
+        eid = _zvec_entry_entity_id(name)
+        remove = False
+        if eid is not None:
+            if eid not in live_ids:
+                remove = True
+            else:
+                try:
+                    resolved = entry.resolve()
+                except OSError:
+                    resolved = entry
+                if resolved not in live_paths:
+                    remove = True
+        elif _is_zvec_residue_name(name) or name.endswith(".__tmp__"):
+            remove = True
+
+        if not remove:
+            stats["kept"] += 1
+            continue
+
+        freed = _path_tree_bytes(entry)
+        _destroy_path(entry)
+        stats["removed"] += 1
+        stats["freed_bytes"] += freed
+        log.info("removed unused zvec entry %s freed=%s", name, freed)
+
+    return stats
 
 
 def _destroy_path(path: Path) -> None:
@@ -1363,6 +1478,10 @@ def _unchanged_skip_reindex(prev_status: str, added: int, changed: int, deleted:
 
 def parse_entity(entity_id: int) -> None:
     """Dispatch by source_mode: 'report' — текст-отчёт, 'dump' — Hierarchical-выгрузка."""
+    from app.services import jobs
+
+    if jobs.is_cancelled(entity_id):
+        return
     conn = connect(settings.db_path)
     try:
         entity = ent_repo.get_entity(conn, entity_id)
@@ -1441,6 +1560,7 @@ def _parse_report_entity(entity_id: int) -> None:
 
         def _on_report_bytes(done: int, total: int) -> None:
             nonlocal last_progress_pct
+            _abort_if_entity_stopped(entity_id, conn)
             pct = _parse_phase_pct(1, _PARSE_FINAL_PCT, done, total)
             if pct == last_progress_pct:
                 return
@@ -1496,6 +1616,8 @@ def _parse_report_entity(entity_id: int) -> None:
 
         timer.mark("stream")
         for node in iter_report_nodes(path, decode_stats, on_progress=_on_report_bytes):
+            if total_obj and total_obj % OBJECT_FLUSH == 0:
+                _abort_if_entity_stopped(entity_id, conn)
             if first_node:
                 # Fallback = tentative upload name (file stem), not e{id}.txt
                 meta = meta_from_first_node(node, entity["name"])
@@ -1641,6 +1763,9 @@ def _parse_report_entity(entity_id: int) -> None:
             persist=False,
         )
         parsed_ok = not skip_reindex
+    except EntityAborted:
+        log.info("parse aborted entity=%s", entity_id)
+        parsed_ok = False
     except Exception as exc:
         log.exception("parse failed entity=%s", entity_id)
         try:
@@ -1660,7 +1785,7 @@ def _parse_report_entity(entity_id: int) -> None:
     finally:
         conn.close()
 
-    if parsed_ok:
+    if parsed_ok and not _entity_stopped(entity_id):
         log.info("auto-reindex after parse entity=%s", entity_id)
         reindex_entity(entity_id)
 
@@ -1821,6 +1946,7 @@ def _parse_dump_entity(entity_id: int) -> None:
 
             def _emit_pct(pct: int) -> None:
                 nonlocal last_progress_pct
+                _abort_if_entity_stopped(entity_id, conn)
                 pct = max(0, min(99, int(pct)))
                 if pct == last_progress_pct:
                     return
@@ -1903,6 +2029,8 @@ def _parse_dump_entity(entity_id: int) -> None:
             timer.mark("meta")
             scanner = DumpScanner(dumps_dir)
             for record, links in scanner.iter_records(should_parse=tracker.observe):
+                if total_obj and total_obj % OBJECT_FLUSH == 0:
+                    _abort_if_entity_stopped(entity_id, conn)
                 if _is_excluded(record["path"]):
                     excluded += 1
                     continue
@@ -2018,6 +2146,7 @@ def _parse_dump_entity(entity_id: int) -> None:
             timer.mark("bsl")
             if modules_enabled:
                 def _on_bsl_module(done: int, total: int) -> None:
+                    _abort_if_entity_stopped(entity_id, conn)
                     _emit_pct(_parse_phase_pct(bsl_lo, _PARSE_BSL_HI, done, total))
 
                 bsl_stats, calls_pending, parsed_bsl_rels = _parse_dump_bsl(
@@ -2198,6 +2327,9 @@ def _parse_dump_entity(entity_id: int) -> None:
                 note=f"bsl_mode={bsl_load_mode}" if bsl_load_mode else "",
             )
             parsed_ok = not skip_reindex
+    except EntityAborted:
+        log.info("dump parse aborted entity=%s", entity_id)
+        parsed_ok = False
     except Exception as exc:
         log.exception("dump parse failed entity=%s", entity_id)
         try:
@@ -2217,7 +2349,7 @@ def _parse_dump_entity(entity_id: int) -> None:
     finally:
         conn.close()
 
-    if parsed_ok:
+    if parsed_ok and not _entity_stopped(entity_id):
         log.info("auto-reindex after dump parse entity=%s", entity_id)
         reindex_entity(entity_id)
 
@@ -2594,6 +2726,7 @@ def _embed_pending_into(
             current_rows = fetch_wave()
             chunks, t_embed0, embed_wait = start_embed(current_rows)
             while current_rows:
+                _abort_if_entity_stopped(entity_id, conn)
                 loop_t0 = t_embed0 or time.perf_counter()
                 nxt = fetch_wave()
                 results = embed_wait.result() if embed_wait is not None else []
@@ -2607,6 +2740,7 @@ def _embed_pending_into(
         else:
             current_rows = fetch_wave()
             while current_rows:
+                _abort_if_entity_stopped(entity_id, conn)
                 chunks, t_embed0, embed_wait = start_embed(current_rows)
                 loop_t0 = t_embed0 or time.perf_counter()
                 results = embed_wait.result() if embed_wait is not None else []
@@ -2764,6 +2898,10 @@ def reindex_entity(
     resume: bool = False,
     reset_bsl_methods: bool = False,
 ) -> None:
+    from app.services import jobs
+
+    if jobs.is_cancelled(entity_id):
+        return
     lock = _try_acquire_reindex_lock(entity_id)
     if lock is None:
         log.warning("reindex skipped, already running in-process entity=%s", entity_id)
@@ -2779,6 +2917,7 @@ def reindex_entity(
         entity = ent_repo.get_entity(conn, entity_id)
         if not entity:
             return
+        _abort_if_entity_stopped(entity_id, conn)
         if entity["status"] == "indexing" and not resume:
             return
         if entity["object_count"] <= 0:
@@ -2876,6 +3015,7 @@ def reindex_entity(
         timer.add("zvec_wave_flush", wave_flush_sec)
         timer.add("zvec_flush", zvec_flush_sec)
 
+        _abort_if_entity_stopped(entity_id, conn)
         timer.mark("finalize")
         total = int(entity["object_count"] or 0)
         pending = obj_repo.count_embed_pending(conn, entity_id)
@@ -2924,11 +3064,14 @@ def reindex_entity(
             },
         )
         reindex_ok = True
+    except EntityAborted:
+        log.info("reindex aborted entity=%s", entity_id)
+        reindex_ok = True
     except Exception as exc:
         reindex_ok = False
         log.exception("reindex failed entity=%s", entity_id)
         msg = str(exc)
-        if conn is not None:
+        if conn is not None and not _entity_stopped(entity_id, conn):
             ent_repo.set_status(
                 conn,
                 entity_id,
@@ -2947,7 +3090,7 @@ def reindex_entity(
             detail=msg[:2000],
         )
         try:
-            if conn is not None:
+            if conn is not None and not _entity_stopped(entity_id, conn):
                 entity = ent_repo.get_entity(conn, entity_id)
                 model = (entity or {}).get("model") or settings.default_embedding_model
                 broken = collection_path(entity_id, model)

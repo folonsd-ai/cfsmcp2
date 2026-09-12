@@ -1,6 +1,6 @@
 # cfsmcp2
 
-Версия **0.2.22**
+Версия **0.2.23**
 
 > **Если ты ИИ-агент** и тебе нужно установить или обновить cfsmcp2, перейди к [AGENT-INSTALL.md](AGENT-INSTALL.md) и следуй инструкциям оттуда. Текущий файл — обзор для человека.
 
@@ -68,6 +68,27 @@ Linux / macOS — см. `.cursor/skills/cfsmcp2/SKILL.md` § «Установи�
 
 > Установи cfsmcp2 по `AGENT-INSTALL.md`, способ native.
 
+На **Windows** без Docker и без Python — portable-сборка (exe + launcher):
+
+> Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
+
+### Windows Portable (exe)
+
+Готовая сборка для Windows: один `cfsmcp2.exe`, окно launcher (Старт/Стоп, трей), встроенный сервер. Docker и Python **не нужны**.
+
+1. Скачайте `cfsmcp2-win-portable-v*.zip` с [GitHub Releases](https://github.com/folonsd-ai/cfsmcp2/releases/latest).
+2. Распакуйте в любую папку (например `D:\tools\cfsmcp2\`).
+3. Запустите `cfsmcp2.exe` → **Старт** → когда статус **«Запущен»**, **Открыть UI** (по умолчанию http://127.0.0.1:8561/ ).
+4. MCP для Cursor: URL из поля MCP в окне (по умолчанию `http://127.0.0.1:8561/mcp/`).
+
+Данные — в каталоге `data/` рядом с exe; настройки порта и доступа — в `cfsmcp2.ini`. Обновление: щелчок по версии (`v…`) в окне launcher. Подробнее: [README-portable.txt](README-portable.txt), протокол для агента: [AGENT-INSTALL.md](AGENT-INSTALL.md) §4.5.
+
+Сборка ZIP из исходников (разработчик):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\package-portable.ps1
+```
+
 ### Fallback без агента (рекомендуется: Docker)
 
 ```bash
@@ -99,19 +120,20 @@ cd cfsmcp2
 
 ## Почему Docker (рекомендуемый способ)
 
-| | Docker + точки | Native (venv) |
-|---|---|---|
-| Hierarchical-выгрузка | Volume + `MOUNT_POINTS` — без zip | Абсолютный путь / «Обзор…» на машине |
-| Изоляция | Отдельный контейнер, данные в `./data` | Процесс Python на хосте |
-| Обзор каталога | Browse внутри точки (`/mnt/…`) | Нативный диалог (tkinter, localhost) |
-| LM Studio | `http://host.docker.internal:1234` | `http://127.0.0.1:1234` |
-| Несколько выгрузок | Несколько named mounts (`erp`, `ut11`, `dumps`) | Несколько локальных путей |
+| | Docker + точки | Native (venv) | Windows Portable |
+|---|---|---|---|
+| Платформа | Win / macOS / Linux | Win / macOS / Linux | **Windows** |
+| Hierarchical-выгрузка | Volume + `MOUNT_POINTS` — без zip | Абсолютный путь / «Обзор…» | «Локальный путь» / «Обзор…» |
+| Изоляция | Контейнер, данные в `./data` | Python на хосте | Exe + `data/` рядом |
+| Порт UI + MCP | `8559` | `8559` | `8561` (по умолчанию) |
+| LM Studio | `http://host.docker.internal:1234` | `http://127.0.0.1:1234` | `http://127.0.0.1:1234` |
+| Установка | Docker + compose | Python 3.13+ + venv | ZIP с Releases, без Docker/Python |
 
-Native — запасной вариант (нет Docker или нужна отладка на хосте). Без `MOUNT_POINTS` в Docker большая выгрузка зайдёт только upload zip/txt.
+Native — запасной вариант (нет Docker или нужна отладка на хосте). **Portable** — для Windows без Docker и Python. Без `MOUNT_POINTS` в Docker большая выгрузка зайдёт только upload zip/txt.
 
 ## Требования
 
-- **Docker** (рекомендуется) или Python 3.13+ — Windows, macOS, Linux
+- **Docker** (рекомендуется), **Windows Portable (exe)** или Python 3.13+ — Windows, macOS, Linux
 - [LM Studio](https://lmstudio.ai/) Local Server с embedding-моделью (по умолчанию `text-embedding-multilingual-e5-small`)
 
 ## Точки подключения (`MOUNT_POINTS`)
