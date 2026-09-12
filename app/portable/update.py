@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
+import sys
 import time
 import zipfile
 from dataclasses import dataclass
@@ -217,8 +219,76 @@ def extract_portable_zip(zip_path: Path, dest_dir: Path) -> Path:
     return find_portable_root(dest_dir)
 
 
+def _staging_version_dir(source: Path, install_root: Path) -> Path | None:
+    pending = install_root / "_updates" / "pending"
+    try:
+        rel = source.relative_to(pending)
+    except ValueError:
+        return None
+    if not rel.parts:
+        return None
+    return pending / rel.parts[0]
+
+
+def _windows_update_script_template() -> Path:
+    here = Path(__file__).resolve().parent
+    bundled = here / "assets" / "apply-update.ps1"
+    if bundled.is_file():
+        return bundled
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        frozen = Path(meipass) / "app" / "portable" / "assets" / "apply-update.ps1"
+        if frozen.is_file():
+            return frozen
+    raise FileNotFoundError("apply-update.ps1 not found in portable assets")
+
+
+def _ensure_windows_update_script(install_root: Path) -> Path:
+    updates_dir = install_root / "_updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    dest = updates_dir / "apply-update.ps1"
+    template = _windows_update_script_template()
+    content = template.read_text(encoding="utf-8")
+    if not dest.is_file() or dest.read_text(encoding="utf-8") != content:
+        dest.write_text(content, encoding="utf-8")
+    return dest
+
+
+def spawn_windows_update_apply(source: Path, target: Path, wait_pid: int) -> None:
+    """Apply update via PowerShell helper (exe must not run from target during copy)."""
+    if not (source / "cfsmcp2.exe").is_file():
+        raise ValueError(f"Источник обновления не содержит cfsmcp2.exe: {source}")
+    script = _ensure_windows_update_script(target)
+    log_path = target / "_updates" / "apply-update.log"
+    version_dir = _staging_version_dir(source, target)
+    cmd = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        str(script),
+        "-Source",
+        str(source),
+        "-Target",
+        str(target),
+        "-WaitPid",
+        str(wait_pid),
+        "-LogFile",
+        str(log_path),
+    ]
+    if version_dir is not None:
+        cmd.extend(["-StagingVersionDir", str(version_dir)])
+    flags = 0x08000000 if os.name == "nt" else 0
+    subprocess.Popen(cmd, cwd=str(target), creationflags=flags)
+
+
 def apply_portable_update(source_root: Path, install_root: Path) -> None:
     """Copy portable build over install dir; keep data/, cfsmcp2.ini and _updates/."""
+    if os.name == "nt":
+        raise RuntimeError("apply_portable_update in-process is unsafe on Windows; use spawn_windows_update_apply")
     if not (source_root / "cfsmcp2.exe").is_file():
         raise ValueError(f"Источник обновления не содержит cfsmcp2.exe: {source_root}")
     install_root.mkdir(parents=True, exist_ok=True)
@@ -269,10 +339,13 @@ def find_pending_staging(install_root: Path) -> Path | None:
     return found[-1][1]
 
 
-def apply_pending_update_if_any(install_root: Path) -> bool:
+def apply_pending_update_if_any(install_root: Path, wait_pid: int = 0) -> bool:
     staging = find_pending_staging(install_root)
     if staging is None:
         return False
+    if os.name == "nt":
+        spawn_windows_update_apply(staging, install_root, wait_pid)
+        return True
     apply_portable_update(staging, install_root)
     cleanup_pending_staging(staging, install_root)
     return True

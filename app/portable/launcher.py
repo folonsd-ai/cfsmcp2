@@ -685,22 +685,27 @@ class PortableLauncher:
         if self.instance_lock is not None:
             self.instance_lock.release()
             self.instance_lock = None
-        exe = Path(sys.executable)
-        cmd = [
-            str(exe),
-            "--apply-update",
-            f"--source={staging_root}",
-            f"--target={self.root_dir}",
-            f"--wait-pid={os.getpid()}",
-        ]
-        flags = CREATE_NO_WINDOW if os.name == "nt" else 0
+        from app.portable.update import spawn_windows_update_apply
+
         try:
-            subprocess.Popen(cmd, cwd=str(self.root_dir), creationflags=flags)
+            if os.name == "nt":
+                spawn_windows_update_apply(staging_root, self.root_dir, os.getpid())
+            else:
+                exe = Path(sys.executable)
+                cmd = [
+                    str(exe),
+                    "--apply-update",
+                    f"--source={staging_root}",
+                    f"--target={self.root_dir}",
+                    f"--wait-pid={os.getpid()}",
+                ]
+                subprocess.Popen(cmd, cwd=str(self.root_dir))
         except OSError as exc:
             self._closing = False
             messagebox.showerror("Обновление", f"Не удалось перезапустить:\n{exc}")
             return
         self.root.destroy()
+        sys.exit(0)
 
     def _open_github_home(self) -> None:
         from app.portable.update import GITHUB_HOME
@@ -887,9 +892,18 @@ def _parse_apply_update_args() -> tuple[Path, Path, int]:
 def _run_apply_update_mode() -> None:
     import traceback
 
-    from app.portable.update import apply_portable_update, cleanup_pending_staging, wait_for_process
+    from app.portable.update import apply_portable_update, cleanup_pending_staging, spawn_windows_update_apply, wait_for_process
 
     source, target, wait_pid = _parse_apply_update_args()
+    if os.name == "nt":
+        try:
+            spawn_windows_update_apply(source, target, os.getpid())
+        except Exception:
+            log.exception("apply-update failed")
+            _write_crash(traceback.format_exc())
+            raise
+        sys.exit(0)
+
     try:
         wait_for_process(wait_pid)
         apply_portable_update(source, target)
@@ -936,7 +950,8 @@ def main() -> None:
     try:
         from app.portable.update import apply_pending_update_if_any
 
-        apply_pending_update_if_any(root_dir)
+        if apply_pending_update_if_any(root_dir, wait_pid=os.getpid()):
+            sys.exit(0)
     except Exception:
         log.exception("pending update apply failed")
     instance_lock = LauncherInstanceLock(root_dir)
