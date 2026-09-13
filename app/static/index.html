@@ -290,16 +290,6 @@
     .source-section { margin-top:14px; padding-top:14px; border-top:1px solid var(--border); }
     .source-section:first-of-type { margin-top:0; padding-top:0; border-top:none; }
     .source-section h3 { margin:0 0 10px; font:700 12.5px var(--font-mono, ui-monospace, monospace); text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
-    .source-export-tool {
-      margin:0 0 10px; padding:8px 10px; border:1px solid var(--border); border-radius:6px;
-      opacity:.72;
-    }
-    .source-export-tool legend { font-size:12px; color:var(--muted); padding:0 4px; }
-    .source-export-tool label.check-row {
-      display:flex; align-items:center; gap:8px; margin:6px 0; font-size:13px; color:var(--text);
-    }
-    .source-export-tool label.check-row input { width:auto; min-width:0; }
-    #sourceSectionExport .ingest-hint { margin-top:8px; }
     .source-section .row { margin-top:8px; }
     .ingest-grid { display:grid; gap:10px; }
     .ingest-grid label.check-row {
@@ -838,6 +828,17 @@
     }
     #dialogModal.has-prompt #dialogPromptInput { display:block; }
     #dialogModal.has-prompt .dialog-msg { margin-bottom:10px; }
+    .type-badge-wrap { display:inline-flex; align-items:center; gap:3px; vertical-align:middle; }
+    .entity-dump-badge {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:22px; height:22px; padding:0; border:none; border-radius:6px;
+      background:color-mix(in srgb, var(--color-accent, var(--accent)) 14%, transparent);
+      color:var(--color-accent, var(--accent)); cursor:pointer; flex:0 0 auto;
+    }
+    .entity-dump-badge svg { width:13px; height:13px; pointer-events:none; }
+    .entity-dump-badge:hover:not(:disabled) { background:color-mix(in srgb, var(--color-accent, var(--accent)) 24%, transparent); }
+    .entity-dump-badge.active { color:var(--color-warning, var(--warn)); background:color-mix(in srgb, var(--color-warning, var(--warn)) 14%, transparent); }
+    .entity-dump-badge:disabled { opacity:.45; cursor:not-allowed; }
     .play-toggle {
       width:32px; height:32px; padding:6px; border-radius:8px;
       display:inline-flex; align-items:center; justify-content:center;
@@ -1416,7 +1417,7 @@
       margin: 6px 2px; background: transparent;
     }
   </style>
-  <link rel="stylesheet" href="/static/ide-console.css?v=29" />
+  <link rel="stylesheet" href="/static/ide-console.css?v=43" />
 </head>
 <body>
   <div class="topbar">
@@ -1514,6 +1515,10 @@
       <button type="button" class="view-tab" data-view="errors" aria-label="Логи ошибок и проблем" data-i18n-aria="view.errors" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <span class="view-tab-tip" role="tooltip"><span class="k" data-i18n="view.tip.errors.k">! · сбои</span><span class="d" data-i18n="view.tip.errors.d">Ошибки и долгие</span></span>
+      </button>
+      <button type="button" class="view-tab" data-view="dumps" aria-label="Выгрузки" data-i18n-aria="view.dumps" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        <span class="view-tab-tip" role="tooltip"><span class="k" data-i18n="view.tip.dumps.k">В · выгрузки</span><span class="d" data-i18n="view.tip.dumps.d">Профили и история дампов</span></span>
       </button>
     </div>
     <div class="toolbar-group" id="toolbarTable">
@@ -1680,6 +1685,55 @@
       </button>
     </div>
 
+    <div id="viewDumps" class="board-view" hidden>
+      <div class="dump-head">
+        <h2 class="dump-title" data-i18n="dump.title">Выгрузки</h2>
+        <button type="button" class="btn primary" id="dumpAddProfileBtn" data-i18n="dump.addProfile">+ Профиль</button>
+      </div>
+      <p id="dumpDockerHint" class="hint dump-docker-hint" hidden data-i18n="dump.dockerHint">Выгрузка недоступна: серверу в контейнере недоступна платформа 1С на хосте.</p>
+      <section id="dumpQueuePanel" class="dump-queue-panel" hidden aria-live="polite">
+        <div class="dump-queue-head">
+          <h3 class="dump-queue-title" data-i18n="dump.queue.title">Очередь выгрузки</h3>
+          <p class="hint dump-queue-hint" data-i18n="dump.queue.hint">Выгрузки выполняются по одной. Перетащите строку или используйте ↑↓ для изменения порядка.</p>
+        </div>
+        <div id="dumpQueueRunning" class="job-queue-running dump-queue-running" hidden></div>
+        <pre id="dumpQueueRunningLog" class="dump-log-tail dump-queue-running-log" hidden></pre>
+        <ul id="dumpQueuePending" class="job-queue-list dump-queue-list" aria-label="Ожидающие выгрузки"></ul>
+        <p id="dumpQueueEmpty" class="hint" hidden data-i18n="dump.queue.empty">Очередь пуста</p>
+      </section>
+      <div class="recent-table-wrap dump-table-wrap">
+        <table class="recent-table dump-profiles-table" id="dumpProfilesTable">
+          <colgroup>
+            <col class="c-check" />
+            <col class="c-profile" />
+            <col class="c-target" />
+            <col class="c-out" />
+            <col class="c-ctx" />
+            <col class="c-last" />
+            <col class="c-actions" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="c-check"><input type="checkbox" id="dumpSelectAll" aria-label="Select all" /></th>
+              <th class="c-profile" data-i18n="dump.colProfile">Профиль</th>
+              <th class="c-target" data-i18n="dump.colTarget">Что</th>
+              <th class="c-out" data-i18n="dump.colOutDir">Куда</th>
+              <th class="c-ctx" data-i18n="dump.colContext">Контекст</th>
+              <th class="c-last" data-i18n="dump.colLastRun">Последний прогон</th>
+              <th class="c-actions" data-i18n="table.actions">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="dumpProfilesBody"></tbody>
+        </table>
+      </div>
+      <p id="dumpProfilesEmpty" class="hint dump-empty" hidden data-i18n="dump.empty">Нет профилей выгрузки.</p>
+      <div class="dump-batch-bar">
+        <button type="button" class="btn primary" id="dumpRunSelectedBtn" data-i18n="dump.runSelected">Выгрузить выделенные</button>
+      </div>
+      <h3 class="dump-history-title" data-i18n="dump.history">История</h3>
+      <div id="dumpHistory" class="dump-history"></div>
+    </div>
+
     <div id="viewStats" class="board-view" hidden>
       <p id="statsMeta" class="muted stats-view-meta"></p>
       <section id="mcpBusyPanel" class="mcp-busy-panel" aria-live="polite">
@@ -1793,6 +1847,32 @@
       </div>
       <div class="modal-tab-panel" data-settings-panel="general" role="tabpanel">
         <div class="settings-stack">
+          <section class="settings-section settings-box" aria-labelledby="settingsOnecTitle" id="settingsOnecSection">
+            <div class="settings-section-title" id="settingsOnecTitle" data-i18n="dump.platform.section">Платформа 1С</div>
+            <p id="settingsOnecDockerHint" class="field-hint hint" hidden data-i18n="dump.dockerHint">Выгрузка недоступна: серверу в контейнере недоступна платформа 1С на хосте.</p>
+            <div class="dump-platform-fields" id="settingsOnecFields">
+              <label class="dump-field-row">
+                <span class="dump-field-label" data-i18n="dump.platform.path">Путь к платформе</span>
+                <div class="dump-field-controls">
+                  <input type="text" id="onecPlatformPath" autocomplete="off" spellcheck="false" />
+                  <button type="button" class="btn secondary" id="onecPlatformDetectBtn" data-i18n="dump.platform.detect">Определить…</button>
+                  <button type="button" class="btn secondary dump-browse-btn" id="onecPlatformBrowseBtn" data-i18n="dump.platform.browse" hidden>Обзор…</button>
+                  <span id="onecPlatformVersion" class="dump-platform-version muted"></span>
+                </div>
+              </label>
+              <label class="dump-field-row">
+                <span class="dump-field-label" data-i18n="dump.platform.outRoot">Каталог выгрузок</span>
+                <div class="dump-field-controls">
+                  <input type="text" id="dumpDefaultOutRoot" autocomplete="off" spellcheck="false" />
+                  <button type="button" class="btn secondary dump-browse-btn" id="dumpDefaultOutBrowseBtn" data-i18n="dump.platform.browse" hidden>Обзор…</button>
+                </div>
+              </label>
+              <p class="field-hint hint" data-i18n="dump.platform.outRootHint">по умолчанию для новых профилей</p>
+              <div class="settings-actions modal-actions" style="justify-content:flex-start;margin-top:8px">
+                <button class="btn secondary" type="button" id="saveOnecPlatformBtn" data-i18n="dump.platform.save">Сохранить</button>
+              </div>
+            </div>
+          </section>
           <section class="settings-section settings-box" aria-labelledby="settingsEmbedTitle">
             <div class="settings-section-title" id="settingsEmbedTitle" data-i18n="appSettings.embedSection">Эмбеддинг</div>
             <div class="settings-metrics" id="embedSettingsInfo" aria-live="polite">
@@ -2180,7 +2260,18 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <p class="dialog-msg" id="dialogMessage"></p>
+      <div class="dialog-body">
+        <div class="dialog-msg" id="dialogMessage"></div>
+        <div id="dialogCheckboxRow" class="dialog-option-row" hidden>
+          <label class="dialog-check-label" for="dialogCheckbox">
+            <input type="checkbox" id="dialogCheckbox" checked />
+            <span class="dialog-check-text">
+              <span class="dialog-check-title" id="dialogCheckboxLabel"></span>
+              <span class="dialog-check-hint" id="dialogCheckboxHint"></span>
+            </span>
+          </label>
+        </div>
+      </div>
       <input id="dialogPromptInput" type="text" autocomplete="off" spellcheck="false" />
       <div class="modal-actions">
         <button class="btn secondary" type="button" id="dialogCancel" data-i18n="dialog.cancel">Отмена</button>
@@ -2217,6 +2308,144 @@
   </div>
 
   <div id="ctxMenu" class="ctx-menu row-ctx-menu" role="menu" aria-hidden="true"></div>
+
+  <div class="modal-backdrop" id="dumpProfileModal" aria-hidden="true">
+    <div class="modal dump-profile-modal xwide" role="dialog" aria-labelledby="dumpProfileTitle">
+      <div class="modal-head">
+        <h2 id="dumpProfileTitle" data-i18n="dump.profile.title">Профиль выгрузки</h2>
+        <button class="modal-close secondary icon" id="closeDumpProfileModal" type="button" data-i18n-aria="close" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="dump-profile-body">
+        <div class="dump-profile-row dump-field-row-2">
+          <label class="dump-field"><span class="dump-field-label" data-i18n="dump.profile.name">Имя</span><input type="text" id="dumpProfName" autocomplete="off" /></label>
+          <label class="dump-field"><span class="dump-field-label" data-i18n="dump.profile.comment">Комментарий</span><input type="text" id="dumpProfComment" autocomplete="off" /></label>
+        </div>
+        <div class="dump-radio-sr" aria-hidden="true">
+          <input type="radio" name="dumpTargetType" value="configuration" checked />
+          <input type="radio" name="dumpTargetType" value="extension" />
+          <input type="radio" name="dumpIbType" value="file" checked />
+          <input type="radio" name="dumpIbType" value="server" />
+          <input type="radio" name="dumpMode" value="update" checked />
+          <input type="radio" name="dumpMode" value="full" />
+          <input type="radio" name="dumpPostAction" value="import" checked />
+          <input type="radio" name="dumpPostAction" value="create_entity" />
+        </div>
+        <div class="dump-profile-section">
+          <div class="dump-section-title" data-i18n="dump.profile.sectionSource">Источник</div>
+          <div class="dump-inline-row">
+            <div class="adv-preset-row dump-seg-row" id="dumpIbTypeSeg" role="group" aria-label="Тип ИБ">
+              <button type="button" class="adv-preset-btn active" data-dump-seg="dumpIbType" data-value="file" data-i18n="dump.profile.ibFile">Файловая ИБ</button>
+              <button type="button" class="adv-preset-btn" data-dump-seg="dumpIbType" data-value="server" data-i18n="dump.profile.ibServer">Серверная</button>
+            </div>
+            <div class="dump-field dump-field-grow" id="dumpIbFileField">
+              <span class="dump-field-label" data-i18n="dump.profile.ibPath">Путь к ИБ</span>
+              <div class="dump-field-row-inline">
+                <input type="text" id="dumpProfIbPath" autocomplete="off" spellcheck="false" />
+                <button type="button" class="btn secondary dump-browse-btn" id="dumpProfIbBrowseBtn" data-i18n="dump.platform.browse" hidden>Обзор…</button>
+              </div>
+            </div>
+          </div>
+          <div id="dumpIbServerRow" class="dump-profile-row dump-ib-panel" hidden>
+            <label class="dump-field"><span class="dump-field-label" data-i18n="dump.profile.ibServerHost">Сервер</span><input type="text" id="dumpProfIbServer" autocomplete="off" /></label>
+            <label class="dump-field"><span class="dump-field-label" data-i18n="dump.profile.ibServerBase">База</span><input type="text" id="dumpProfIbBase" autocomplete="off" /></label>
+          </div>
+          <div class="dump-profile-row dump-field-row-2">
+            <label class="dump-field"><span class="dump-field-label" data-i18n="dump.profile.ibUser">Пользователь</span><input type="text" id="dumpProfIbUser" autocomplete="off" /></label>
+            <label class="dump-field">
+              <span class="dump-field-label"><span data-i18n="dump.profile.password">Пароль</span> <span id="dumpProfPasswordSavedTag" class="dump-password-saved-tag" hidden data-i18n="dump.profile.passwordSavedShort">сохранён</span></span>
+              <div class="dump-password-wrap">
+                <input type="password" id="dumpProfPassword" autocomplete="new-password" />
+                <button type="button" class="dump-password-clear" id="dumpProfPasswordClearBtn" hidden title="Очистить" aria-label="Очистить пароль">×</button>
+              </div>
+            </label>
+          </div>
+          <div class="dump-inline-row dump-target-row">
+            <div class="adv-preset-row dump-seg-row" id="dumpTargetTypeSeg" role="group" aria-label="Цель выгрузки">
+              <button type="button" class="adv-preset-btn active" data-dump-seg="dumpTargetType" data-value="configuration" data-i18n="dump.target.configuration">Конфигурация</button>
+              <button type="button" class="adv-preset-btn" data-dump-seg="dumpTargetType" data-value="extension" data-i18n="dump.profile.targetExtension">Расширение</button>
+            </div>
+            <button type="button" class="btn secondary dump-extension-load-btn" id="dumpProfExtensionLoadBtn" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+              <span data-i18n="dump.profile.extensionLoad">Из ИБ…</span>
+            </button>
+            <label class="dump-field dump-field-grow" id="dumpExtensionField" hidden>
+              <span class="dump-field-label" data-i18n="dump.profile.extensionName">Имя расширения</span>
+              <div class="dump-extension-input-wrap">
+                <input type="text" id="dumpProfExtension" autocomplete="off" spellcheck="false" data-i18n-placeholder="dump.profile.extensionName" placeholder="Имя расширения" aria-autocomplete="list" aria-controls="dumpProfExtensionSuggest" aria-expanded="false" />
+                <div class="dump-extension-suggest" id="dumpProfExtensionSuggest" hidden role="listbox"></div>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div class="dump-profile-section">
+          <div class="dump-section-title" data-i18n="dump.profile.sectionTool">Чем</div>
+          <div class="dump-platform-compact" id="dumpPlatformCompact">
+            <span id="dumpProfPlatformSummary"></span>
+            <span class="dump-platform-sep" aria-hidden="true">·</span>
+            <button type="button" class="dump-link-btn" id="dumpProfPlatformToggle" data-i18n="dump.profile.platformOverrideLink">переопределить</button>
+          </div>
+          <div id="dumpProfPlatformOverrideRow" class="dump-field dump-platform-override" hidden>
+            <span class="dump-field-label" data-i18n="dump.profile.platformPath">Путь к 1cv8.exe</span>
+            <div class="dump-field-row-inline">
+              <input type="text" id="dumpProfPlatformPath" autocomplete="off" spellcheck="false" />
+              <button type="button" class="btn secondary dump-browse-btn" id="dumpProfPlatformBrowseBtn" data-i18n="dump.platform.browse" hidden>Обзор…</button>
+            </div>
+          </div>
+        </div>
+        <div class="dump-profile-section">
+          <div class="dump-section-title" data-i18n="dump.profile.sectionTo">Куда</div>
+          <div class="dump-field dump-field-grow dump-field-inline dump-field-out">
+            <span class="dump-field-label" data-i18n="dump.profile.outDirLabel">Каталог выгрузки</span>
+            <div class="dump-field-row-inline">
+              <input type="text" id="dumpProfOutDir" autocomplete="off" spellcheck="false" />
+              <button type="button" class="btn secondary dump-browse-btn" id="dumpProfOutBrowseBtn" data-i18n="dump.platform.browse" hidden>Обзор…</button>
+            </div>
+          </div>
+          <div class="dump-inline-row dump-mode-row">
+            <div class="adv-preset-row dump-seg-row" id="dumpModeSeg" role="group" aria-label="Режим выгрузки">
+              <button type="button" class="adv-preset-btn active" data-dump-seg="dumpMode" data-value="update" data-i18n="dump.profile.modeUpdate">Инкрементно (-update)</button>
+              <button type="button" class="adv-preset-btn" data-dump-seg="dumpMode" data-value="full" data-i18n="dump.profile.modeFull">Полная</button>
+            </div>
+            <label class="dump-field dump-field-timeout">
+              <span class="dump-field-label" data-i18n="dump.profile.timeout">Таймаут (ч)</span>
+              <input type="number" id="dumpProfTimeout" min="1" max="24" step="1" value="2" />
+            </label>
+          </div>
+          <label class="check-row dump-clear-row" id="dumpProfClearRow" hidden>
+            <input type="checkbox" id="dumpProfClearBeforeFull" />
+            <span data-i18n="dump.profile.clearBeforeFull">очистить каталог перед полной выгрузкой</span>
+          </label>
+          <p id="dumpProfFullHint" class="hint" hidden data-i18n="dump.profile.fullHint">Полная выгрузка меняет mtime всех файлов — cfsmcp2 перечитает дерево целиком.</p>
+          <p id="dumpProfClearWarn" class="hint dump-warn" hidden></p>
+        </div>
+        <div class="dump-profile-section dump-profile-section-last">
+          <div class="dump-section-title" data-i18n="dump.profile.sectionAfter">Что дальше</div>
+          <div class="dump-inline-row dump-post-row">
+            <div class="adv-preset-row dump-seg-row" id="dumpPostActionSeg" role="group" aria-label="Действие после выгрузки">
+              <button type="button" class="adv-preset-btn active" data-dump-seg="dumpPostAction" data-value="import" data-i18n="dump.profile.postImport">загрузить в контекст</button>
+              <button type="button" class="adv-preset-btn" data-dump-seg="dumpPostAction" data-value="create_entity" data-i18n="dump.profile.postCreate">создать новый контекст</button>
+            </div>
+            <label class="dump-field dump-field-grow dump-field-inline" id="dumpProfEntityField">
+              <span class="dump-field-label" data-i18n="dump.colContext">Контекст</span>
+              <select id="dumpProfEntityId"></select>
+            </label>
+          </div>
+          <p id="dumpProfPostCreateHint" class="hint" hidden data-i18n="dump.profile.postCreateHint">После успешной выгрузки контекст создаётся автоматически; профиль переключится на «загрузить в контекст».</p>
+        </div>
+      </div>
+      <div id="dumpProfPreflightBar" class="dump-preflight-bar" hidden aria-live="polite"></div>
+      <div class="modal-actions dump-profile-actions">
+        <button type="button" class="btn danger" id="dumpProfDeleteBtn" hidden data-i18n="dump.profile.delete">Удалить</button>
+        <span class="dump-profile-actions-sep" id="dumpProfDeleteSep" hidden aria-hidden="true"></span>
+        <span class="dump-profile-actions-spacer"></span>
+        <button type="button" class="btn secondary" id="dumpProfCheckBtn" data-i18n="dump.profile.check">Проверить</button>
+        <button type="button" class="btn secondary" id="dumpProfCancelBtn" data-i18n="dialog.cancel">Отмена</button>
+        <button type="button" class="btn primary" id="dumpProfSaveBtn" data-i18n="dump.profile.save">Сохранить</button>
+      </div>
+    </div>
+  </div>
 
   <div class="modal-backdrop" id="ingestModal" aria-hidden="true">
     <div class="modal ingest-modal xwide" role="dialog" aria-labelledby="ingestModalTitle">
@@ -2430,6 +2659,7 @@
           </div>
         </div>
         <p class="ingest-hint hint" id="sourceCatalogHint" data-i18n="source.catalogHint">Абсолютный путь: «Сохранить» — без загрузки; «Загрузить» — import-path.</p>
+        <p class="hint dump-trace-line" id="sourceDumpTrace" hidden></p>
         <div class="source-path-suggest" id="sourcePathSuggest" hidden>
           <div id="sourcePathSuggestTitle" data-i18n="source.pathMissing">Источник недоступен. Похожие каталоги в точках подключения:</div>
           <ul id="sourcePathSuggestList"></ul>
@@ -2452,27 +2682,6 @@
         </div>
         <input type="file" id="sourceModalDir" webkitdirectory directory multiple hidden />
         <input type="file" id="sourceModalFile" accept=".txt" hidden />
-      </section>
-
-      <!-- Export-from-IB: hidden until DESIGNER/ibcmd is implemented -->
-      <section class="source-section" id="sourceSectionExport" hidden aria-hidden="true">
-        <h3 data-i18n="source.section.export">Выгрузить в файлы</h3>
-        <label data-i18n-label="source.connString"><span class="i18n-label">Строка соединения ИБ</span>
-          <input type="text" id="source1cConn" disabled autocomplete="off" data-i18n-placeholder="source.connPlaceholder" placeholder="строка соединения / путь ИБ" />
-        </label>
-        <fieldset class="source-export-tool" id="sourceExportToolFieldset" disabled>
-          <legend data-i18n="source.exportTool">Инструмент выгрузки</legend>
-          <label class="check-row">
-            <input type="radio" name="sourceExportTool" value="designer" checked disabled id="sourceExportDesigner" />
-            <span data-i18n="source.exportDesigner">DESIGNER /DumpConfigToFiles</span>
-          </label>
-          <label class="check-row">
-            <input type="radio" name="sourceExportTool" value="ibcmd" disabled id="sourceExportIbcmd" />
-            <span data-i18n="source.exportIbcmd">ibcmd infobase config export</span>
-          </label>
-        </fieldset>
-        <button id="sourceExportBtn" type="button" disabled data-i18n="source.exportBtn">Выгрузить</button>
-        <p class="ingest-hint" data-i18n="source.exportDisabled">В следующих версиях</p>
       </section>
 
       <section class="source-section" id="sourceSectionMcp" hidden aria-hidden="true">
@@ -2543,10 +2752,15 @@
     const dialogTitle = document.getElementById('dialogTitle');
     const dialogMessage = document.getElementById('dialogMessage');
     const dialogPromptInput = document.getElementById('dialogPromptInput');
+    const dialogCheckboxRow = document.getElementById('dialogCheckboxRow');
+    const dialogCheckbox = document.getElementById('dialogCheckbox');
+    const dialogCheckboxLabel = document.getElementById('dialogCheckboxLabel');
+    const dialogCheckboxHint = document.getElementById('dialogCheckboxHint');
     const dialogOk = document.getElementById('dialogOk');
     const dialogCancel = document.getElementById('dialogCancel');
     let dialogResolve = null;
     let dialogPromptMode = false;
+    let dialogCheckboxMode = false;
 
     // --- cfsmcp2: ingest profile & dump upload ---
     const DEFAULT_INGEST_PROFILE = {
@@ -2591,6 +2805,7 @@
     let pendingIngestMode = 'dump';
     let pendingIngestSkipLastPath = false;
     let pendingIngestFolderHint = '';
+    let pendingIngestSkipDeliveryCheck = false;
     let ingestNameAuto = '';
     let ingestVersionAuto = '';
     let ingestCommentAuto = '';
@@ -2942,6 +3157,8 @@
       refreshMountSelect();
       const srcBrowse = document.getElementById('sourceBrowseMountBtn');
       if (srcBrowse) srcBrowse.hidden = !usesMountPathUi();
+      if (typeof syncDumpBrowseButtons === 'function') syncDumpBrowseButtons();
+      if (typeof syncDumpDockerUi === 'function') syncDumpDockerUi();
       return runtimeInfo;
     }
 
@@ -3161,9 +3378,10 @@
       opts = opts || {};
       pendingIngestSkipLastPath = !!opts.skipLastPath;
       pendingIngestFolderHint = String(opts.folderHint || '').trim();
+      pendingIngestSkipDeliveryCheck = !!opts.skipDeliveryCheck;
       const isReport = mode === 'report';
       const deliverySection = document.getElementById('ingestDeliverySection');
-      if (deliverySection) deliverySection.style.display = '';
+      if (deliverySection) deliverySection.style.display = opts.skipDeliveryCheck ? 'none' : '';
       document.getElementById('ingestBsl').checked = !isReport && profile.bsl !== false;
       document.getElementById('ingestDcs').checked = !!profile.dcs;
       document.getElementById('ingestTemplates').checked = !!profile.spreadsheet_templates;
@@ -3332,7 +3550,7 @@
       ingestCommentAuto = '';
       ingestCommentStamp = '';
       const nameInp = document.getElementById('ingestName');
-      if (nameInp) nameInp.value = String(opts.initialName || '').trim();
+      if (nameInp) nameInp.value = String(opts.initialName || opts.suggestedName || '').trim();
       const commentInp = document.getElementById('ingestComment');
       if (commentInp) commentInp.value = '';
       syncIngestProfileForMode(mode, profile, opts);
@@ -3356,6 +3574,7 @@
       document.getElementById('ingestModal').setAttribute('aria-hidden', 'true');
       pendingIngestSkipLastPath = false;
       pendingIngestFolderHint = '';
+      pendingIngestSkipDeliveryCheck = false;
       const r = pendingIngestResolve;
       pendingIngestResolve = null;
       if (r) r(result || null);
@@ -3363,6 +3582,10 @@
 
     async function confirmIngestProfileDialog() {
       const choice = collectIngestChoiceFromForm();
+      if (pendingIngestSkipDeliveryCheck) {
+        closeIngestProfileDialog(choice);
+        return;
+      }
       if (choice.sourceLocation === 'path') {
         if (!choice.sourcePath) {
           await showAlert(t('upload.pickLocalPath'), t('ingest.deliveryPath'));
@@ -3949,6 +4172,7 @@
       sourceCommentAuto = comment.trim();
       syncSourceModalForEntity(e);
       renderSourceEmbedInfo(e);
+      renderSourceDumpTrace(e.id);
       const reindexBtn = document.getElementById('sourceReindexBtn');
       if (reindexBtn) reindexBtn.disabled = busy.has(e.status);
       const srcBrowse = document.getElementById('sourceBrowseMountBtn');
@@ -4892,6 +5116,7 @@
       syncStatsWindowOptions();
       setAppSettingsTab('general');
       updateSettingsToolsTabLabel(settingsToolsCount);
+      syncOnecPlatformSettingsForm();
       appSettingsModal.classList.add('open');
       appSettingsModal.setAttribute('aria-hidden', 'false');
       loadDbInfo();
@@ -5173,8 +5398,37 @@
       };
     }
 
-    function setBoardView(name) {
-      const allowed = ['table', 'stats', 'events', 'errors'];
+    function syncBoardViewHash(view, { skipHash } = {}) {
+      if (skipHash) return;
+      const base = `${location.pathname}${location.search}` || '/';
+      if (view === 'dumps') {
+        if (location.hash !== '#dumps') location.hash = 'dumps';
+      } else if (location.hash === '#dumps') {
+        history.replaceState(null, '', base);
+      }
+    }
+
+    function goToDumpsView(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      closeSourceModal();
+      setBoardView('dumps');
+    }
+
+    function openEntityDumpProfile(ev, profileId) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      closeSourceModal();
+      void openDumpProfileModal(Number(profileId));
+    }
+
+    function setBoardView(name, opts) {
+      const skipHash = !!(opts && opts.skipHash);
+      const allowed = ['table', 'stats', 'events', 'errors', 'dumps'];
       boardView = allowed.includes(name) ? name : 'table';
       document.querySelectorAll('.view-tab').forEach((btn) => {
         const on = btn.getAttribute('data-view') === boardView;
@@ -5186,6 +5440,7 @@
         stats: 'viewStats',
         events: 'viewEvents',
         errors: 'viewErrors',
+        dumps: 'viewDumps',
       };
       Object.entries(map).forEach(([key, id]) => {
         const el = document.getElementById(id);
@@ -5214,6 +5469,14 @@
           try { loadMcpBusy(); } catch (_) {}
         }, 1500);
       }
+      if (boardView === 'dumps') {
+        stopDumpPoll();
+        void loadDumpBoard();
+        startDumpPoll();
+      } else {
+        stopDumpPoll();
+      }
+      syncBoardViewHash(boardView, { skipHash });
     }
 
     function openStatsModal() {
@@ -5224,31 +5487,45 @@
     }
     function closeAllModals() {
       closeLmModal(); closeAppSettingsModal(); closeStatsModal(); closeCopyModal(); closeRenameModal(); closeModulesModal();
-      closeJobQueueModal();
+      closeJobQueueModal(); closeDumpProfileModal();
       closeTagsManage(); closeTagPicker(); closeEntityInfo();
       closeDialogModal(false); closeCtxMenu();
     }
 
     function closeDialogModal(result) {
-      dialogModal.classList.remove('open', 'has-prompt');
+      dialogModal.classList.remove('open', 'has-prompt', 'has-checkbox');
       dialogModal.setAttribute('aria-hidden', 'true');
+      dialogMessage.innerHTML = '';
+      dialogMessage.classList.remove('dialog-rich');
       const resolve = dialogResolve;
       const promptMode = dialogPromptMode;
+      const checkboxMode = dialogCheckboxMode;
       dialogResolve = null;
       dialogPromptMode = false;
+      dialogCheckboxMode = false;
+      if (dialogCheckboxRow) dialogCheckboxRow.hidden = true;
       if (!resolve) return;
       if (promptMode) {
         resolve(result ? String(dialogPromptInput.value || '').trim() : null);
+      } else if (checkboxMode) {
+        resolve(result ? { ok: true, checked: !!dialogCheckbox?.checked } : { ok: false, checked: false });
       } else {
         resolve(!!result);
       }
     }
-    function openDialog({ title, message, okText, cancelText, danger, showCancel, prompt, defaultValue, placeholder }) {
+    function openDialog({ title, message, messageHtml, okText, cancelText, danger, showCancel, prompt, defaultValue, placeholder, checkbox }) {
       return new Promise((resolve) => {
         dialogResolve = resolve;
         dialogPromptMode = !!prompt;
+        dialogCheckboxMode = !!checkbox;
         dialogTitle.textContent = title || t('dialog.message');
-        dialogMessage.textContent = message || '';
+        if (messageHtml) {
+          dialogMessage.innerHTML = messageHtml;
+          dialogMessage.classList.add('dialog-rich');
+        } else {
+          dialogMessage.textContent = message || '';
+          dialogMessage.classList.remove('dialog-rich');
+        }
         dialogOk.textContent = okText || t('dialog.ok');
         dialogCancel.textContent = cancelText || t('dialog.cancel');
         dialogOk.className = danger ? 'danger' : '';
@@ -5262,6 +5539,24 @@
           dialogModal.classList.remove('has-prompt');
           dialogPromptInput.value = '';
           dialogPromptInput.hidden = true;
+        }
+        if (checkbox && dialogCheckboxRow && dialogCheckbox && dialogCheckboxLabel) {
+          dialogModal.classList.add('has-checkbox');
+          dialogCheckboxRow.hidden = false;
+          dialogCheckbox.checked = checkbox.checked !== false;
+          dialogCheckboxLabel.textContent = checkbox.label || '';
+          if (dialogCheckboxHint) {
+            const hint = (checkbox.hint || '').trim();
+            dialogCheckboxHint.textContent = hint;
+            dialogCheckboxHint.hidden = !hint;
+          }
+        } else {
+          dialogModal.classList.remove('has-checkbox');
+          if (dialogCheckboxRow) dialogCheckboxRow.hidden = true;
+          if (dialogCheckboxHint) {
+            dialogCheckboxHint.textContent = '';
+            dialogCheckboxHint.hidden = true;
+          }
         }
         dialogModal.classList.add('open');
         dialogModal.setAttribute('aria-hidden', 'false');
@@ -5513,6 +5808,7 @@
       wSel.value = ['1','2','4','8','12','16'].includes(w) ? w : '2';
       applyEntitiesPollInterval(settings.ui_poll_interval_sec);
       syncStatsWindowOptions();
+      if (typeof syncOnecPlatformSettingsForm === 'function') syncOnecPlatformSettingsForm();
       await loadModels();
     }
 
@@ -6319,6 +6615,7 @@
       copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
       rename: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
       play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+      dumpRun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h16"/></svg>',
       pause: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3v14H7zm7 0h3v14h-3z"/></svg>',
       trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
       info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
@@ -6367,7 +6664,7 @@
       ctxMenu.innerHTML = '';
       ctxMenuId = null;
       ctxMenuMode = null;
-      document.querySelectorAll('#entityBoard tr.ctx-active').forEach((tr) => tr.classList.remove('ctx-active'));
+      document.querySelectorAll('#entityBoard tr.ctx-active, #dumpProfilesBody tr.ctx-active').forEach((tr) => tr.classList.remove('ctx-active'));
     }
 
     function positionFloating(el, x, y) {
@@ -6420,6 +6717,16 @@
       const mode = ctxMenuMode;
       const id = ctxMenuId;
       closeCtxMenu();
+      if (mode === 'dumpProfile') {
+        if (act === 'edit') void openDumpProfileModal(id);
+        else if (act === 'run') {
+          const p = dumpProfileById(id);
+          void confirmAndRunDumpProfile(id, p?.entity_id || null);
+        }
+        else if (act === 'copy') void copyDumpProfileById(id);
+        else if (act === 'delete') void deleteDumpProfileById(id);
+        return;
+      }
       if (mode === 'persistLog') {
         if (act === 'exportSel') {
           const rows = persistLogSelectedRows();
@@ -6511,11 +6818,14 @@
         name: `<td class="name-cell">
             <div class="ctx-name">
               <span class="head name-head">
-                <span class="type-badge ${isExt ? 'cfe ext' : 'cf'}"
-                  role="button" tabindex="0"
-                  data-copy-name="${escapeAttr(e.name)}"
-                  title="${escapeAttr(t('row.copyName'))}"
-                  aria-label="${escapeAttr(t('row.copyName') + ': ' + e.name)}">${typeBadge}</span>
+                <span class="type-badge-wrap">
+                  <span class="type-badge ${isExt ? 'cfe ext' : 'cf'}"
+                    role="button" tabindex="0"
+                    data-copy-name="${escapeAttr(e.name)}"
+                    title="${escapeAttr(t('row.copyName'))}"
+                    aria-label="${escapeAttr(t('row.copyName') + ': ' + e.name)}">${typeBadge}</span>
+                  ${entityDumpBadgeHtml(e.id)}
+                </span>
                 <span class="n">${escapeHtml(e.name)}</span>
               </span>
               <textarea class="comment-input c" rows="1" data-entity-id="${e.id}"
@@ -6525,6 +6835,7 @@
                 onchange="saveEntityComment(${e.id}, this)"
                 onclick="event.stopPropagation()">${escapeHtml(e.comment || '')}</textarea>
               <span class="p source-path" title="${escapeAttr(srcKind + ' · ' + srcFull)}">${escapeHtml(srcKind)} · ${escapeHtml(srcPath)}</span>
+              ${entityDumpActiveHtml(e.id)}${entityDumpTraceHtml(e.id)}
             </div>
           </td>`,
         profile: `<td class="col-profile">${profileHtml}</td>`,
@@ -7258,6 +7569,15 @@
           e.usage_calls, e.usage_share_pct, e.usage_bar_pct, e.usage_window_sec,
           e.parse_added, e.parse_changed, e.parse_deleted, e.parse_unchanged,
           (e.tag_ids || []).join(','),
+          (dumpProfilesForEntity(e.id).map((p) => p.id).join(',')),
+          (() => {
+            const active = entityDumpActiveById[e.id];
+            return active ? [active.run.id, active.run.state] : null;
+          })(),
+          (() => {
+            const trace = entityDumpTraceById[e.id];
+            return trace ? [trace.run.id, trace.run.state, trace.run.finished_at || '', trace.run.ingest_state || ''] : null;
+          })(),
         ])),
         tags: tagsList.map((t) => [t.id, t.name, t.color]),
       });
@@ -7270,6 +7590,7 @@
         fetch('/api/entities'),
         fetch('/api/tags'),
         fetch('/api/system/job-queue'),
+        refreshEntityDumpState(),
       ]);
       if (!entRes.ok) throw new Error('entities HTTP ' + entRes.status);
       const data = await entRes.json();
@@ -8050,6 +8371,11 @@
     };
     document.querySelectorAll('.view-tab').forEach((btn) => {
       btn.addEventListener('click', () => setBoardView(btn.getAttribute('data-view')));
+    });
+    if (location.hash === '#dumps') setBoardView('dumps', { skipHash: true });
+    window.addEventListener('hashchange', () => {
+      if (location.hash === '#dumps') setBoardView('dumps', { skipHash: true });
+      else if (boardView === 'dumps') setBoardView('table', { skipHash: true });
     });
     document.getElementById('refreshEvents')?.addEventListener('click', () => loadStats());
     document.getElementById('bannerOpenLm')?.addEventListener('click', () => openLmModal());
@@ -9165,6 +9491,1457 @@
         showAlert(String(err && err.message ? err.message : err), t('dialog.error'));
       }
     }
+
+    let dumpProfiles = [];
+    let dumpRuns = [];
+    let entityDumpTraceById = {};
+    let entityDumpProfileById = {};
+    let entityDumpActiveById = {};
+    let dumpSelectedProfileIds = new Set();
+    let dumpPollTimer = null;
+    let dumpEditingId = null;
+    let dumpExtensionNames = [];
+    let dumpExtensionSuggestOpen = false;
+    const DUMP_PWD_MASK = '••••••••';
+    let dumpPasswordMode = 'empty'; // empty | stored | editing | cleared
+    let dumpPlatformOverrideOpen = false;
+    let dumpHasStoredPassword = false;
+    let dumpExpandedRunId = null;
+    let dumpActiveRunId = null;
+    let dumpQueueSnapshot = { running: null, pending: [] };
+    let dumpQueueDragId = null;
+    const dumpProfileModal = document.getElementById('dumpProfileModal');
+
+    function isDumpDockerBlocked() {
+      return String(runtimeInfo.mode || '').toLowerCase() === 'docker';
+    }
+
+    function syncDumpBrowseButtons() {
+      const show = !!runtimeInfo.pick_path_available;
+      document.querySelectorAll('.dump-browse-btn').forEach((btn) => {
+        btn.hidden = !show;
+      });
+    }
+
+    function syncDumpDockerUi() {
+      const blocked = isDumpDockerBlocked();
+      ['dumpDockerHint', 'settingsOnecDockerHint'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.hidden = !blocked;
+      });
+      const fields = document.getElementById('settingsOnecFields');
+      if (fields) {
+        fields.querySelectorAll('input,button').forEach((el) => { el.disabled = blocked; });
+      }
+      const addBtn = document.getElementById('dumpAddProfileBtn');
+      if (addBtn) addBtn.disabled = blocked;
+      syncDumpBatchButton();
+      document.querySelectorAll('.dump-run-btn, .dump-edit-btn, .dump-copy-btn, .dump-delete-btn').forEach((btn) => {
+        btn.disabled = blocked;
+      });
+    }
+
+    function formatDumpElapsed(sec) {
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const r = s % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+      return `${m}:${String(r).padStart(2, '0')}`;
+    }
+
+    function parseSqliteUtc(v) {
+      if (!v) return null;
+      const s = String(v).trim().replace(' ', 'T').slice(0, 19);
+      if (!s) return null;
+      const d = new Date(`${s}Z`);
+      return Number.isFinite(d.getTime()) ? d : null;
+    }
+
+    function dumpRunDuration(run) {
+      const start = parseSqliteUtc(run.started_at);
+      const end = parseSqliteUtc(run.finished_at);
+      if (!start) return '';
+      const endMs = end ? end.getTime() : Date.now();
+      return formatDumpElapsed((endMs - start.getTime()) / 1000);
+    }
+
+    function dumpProfileById(id) {
+      return dumpProfiles.find((p) => Number(p.id) === Number(id));
+    }
+
+    function openDumpCtxMenu(id, x, y) {
+      const p = dumpProfileById(id);
+      if (!p) return;
+      closeCtxMenu();
+      closeTagPicker();
+      if (typeof closeHeaderCtxMenu === 'function') closeHeaderCtxMenu();
+      if (typeof closeColVisibilityMenu === 'function') closeColVisibilityMenu();
+      ctxMenuMode = 'dumpProfile';
+      ctxMenuId = id;
+      const blocked = isDumpDockerBlocked();
+      ctxMenu.innerHTML =
+        `<div class="ctx-label" title="${escapeAttr(p.name)}">${escapeHtml(p.name)}</div>` +
+        `<button type="button" role="menuitem" data-act="edit">${ICONS.rename}<span>${t('dump.ctx.edit')}</span></button>` +
+        `<button type="button" role="menuitem" data-act="copy" ${blocked ? 'disabled' : ''}>${ICONS.copy}<span>${t('dump.ctx.copy')}</span></button>` +
+        `<button type="button" role="menuitem" data-act="run" ${blocked ? 'disabled' : ''}>${ICONS.dumpRun}<span>${t('dump.ctx.run')}</span></button>` +
+        `<div class="ctx-sep"></div>` +
+        `<button type="button" role="menuitem" class="danger" data-act="delete">${ICONS.trash}<span>${t('ctx.delete')}</span></button>`;
+      ctxMenu.classList.add('open');
+      ctxMenu.setAttribute('aria-hidden', 'false');
+      const tr = document.querySelector(`#dumpProfilesBody tr[data-profile-id="${id}"]`);
+      if (tr) tr.classList.add('ctx-active');
+      positionFloating(ctxMenu, x, y);
+    }
+
+    function dumpEntityName(entityId) {
+      if (!entityId) return '—';
+      const e = entitiesById[entityId];
+      return e ? (e.name || `#${entityId}`) : `#${entityId}`;
+    }
+
+    function dumpTargetLabel(p) {
+      if ((p.target_type || '') === 'extension') {
+        return t('dump.target.extension', { name: p.extension_name || '?' });
+      }
+      return t('dump.target.configuration');
+    }
+
+    function dumpRunStateLabel(run) {
+      if (run.state === 'ok' && run.ingest_state === 'blocked') {
+        return t('dump.state.blocked');
+      }
+      if (run.state === 'ok' && run.ingest_state === 'done') {
+        return t('dump.state.ingestDone');
+      }
+      if (run.state === 'ok' && run.ingest_state === 'pending' && run.error_reason) {
+        return t('entity.dump.ingestDeferred');
+      }
+      const key = 'dump.state.' + (run.state || 'failed');
+      return t(key);
+    }
+
+    function entityDumpIngestTail(run) {
+      if (!run) return '';
+      if (run.ingest_state === 'done') return t('entity.dump.ingestDone');
+      if (run.ingest_state === 'blocked') {
+        const reason = (run.error_reason || '').trim();
+        return reason ? `${t('entity.dump.ingestBlocked')}: ${reason}` : t('entity.dump.ingestBlocked');
+      }
+      if (run.ingest_state === 'pending' && run.error_reason) return t('entity.dump.ingestDeferred');
+      if (run.ingest_state === 'pending') return t('entity.dump.ingestPending');
+      return dumpRunStateLabel(run);
+    }
+
+    async function refreshEntityDumpState() {
+      try {
+        const [profiles, runs] = await Promise.all([
+          fetch('/api/dump/profiles').then((r) => (r.ok ? r.json() : [])),
+          fetch('/api/dump/runs?limit=120').then((r) => (r.ok ? r.json() : [])),
+        ]);
+        dumpProfiles = profiles || [];
+        const profById = Object.fromEntries(dumpProfiles.map((p) => [p.id, p]));
+        entityDumpProfileById = {};
+        entityDumpTraceById = {};
+        entityDumpActiveById = {};
+        for (const p of dumpProfiles) {
+          const eid = Number(p.entity_id);
+          if (!eid) continue;
+          if (!entityDumpProfileById[eid]) entityDumpProfileById[eid] = [];
+          entityDumpProfileById[eid].push(p);
+        }
+        for (const eid of Object.keys(entityDumpProfileById)) {
+          entityDumpProfileById[eid].sort((a, b) =>
+            String(a.name || '').localeCompare(String(b.name || ''), 'ru'),
+          );
+        }
+        for (const run of runs || []) {
+          const prof = profById[run.profile_id];
+          if (!prof || !prof.entity_id) continue;
+          const eid = Number(prof.entity_id);
+          if (run.state === 'running' || run.state === 'queued') {
+            entityDumpActiveById[eid] = { run, profile: prof };
+            continue;
+          }
+          if (!entityDumpTraceById[eid]) {
+            entityDumpTraceById[eid] = { run, profile: prof };
+          }
+        }
+      } catch (_) {
+        entityDumpProfileById = {};
+        entityDumpTraceById = {};
+        entityDumpActiveById = {};
+      }
+    }
+
+    function dumpProfilesForEntity(entityId) {
+      return entityDumpProfileById[Number(entityId)] || [];
+    }
+
+    function dumpProfileIngestAvailable(profile) {
+      const pa = String(profile?.post_action || '').trim().toLowerCase();
+      return pa === 'import' || pa === 'import+reindex' || pa === 'create_entity';
+    }
+
+    function entityDumpBadgeHtml(entityId) {
+      const profiles = dumpProfilesForEntity(entityId);
+      if (!profiles.length) return '';
+      const primary = profiles[0];
+      const blocked = isDumpDockerBlocked();
+      const active = entityDumpActiveById[Number(entityId)];
+      const names = profiles.map((p) => p.name || '').filter(Boolean).join(', ');
+      let title = t('entity.dump.profileLinked', { name: names });
+      if (active) {
+        const st = active.run.state === 'running' ? t('dump.state.running') : t('dump.state.queued');
+        title += ` · ${st}`;
+      }
+      const activeCls = active ? ' active' : '';
+      return `<button type="button" class="entity-dump-badge${activeCls}" ` +
+        `title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}" ` +
+        `${blocked ? 'disabled' : ''} ` +
+        `onclick="event.stopPropagation(); runDumpProfileForEntity(${entityId}, ${primary.id})">${ICONS.dumpRun}</button>`;
+    }
+
+    function dumpRunConfirmMessageHtml(profile, entityId) {
+      const entity = entityId ? entitiesById[entityId] : null;
+      const entityName = entity?.name || dumpEntityName(profile?.entity_id) || '';
+      const profileName = profile?.name || '';
+      if (entityName) {
+        return `<div class="dialog-dump-confirm">` +
+          `<p class="dialog-dump-lead">${escapeHtml(t('entity.dump.confirmLead'))}</p>` +
+          `<div class="dialog-dump-names">` +
+          `<div class="dialog-dump-item"><span class="k">${escapeHtml(t('entity.dump.colProfile'))}</span><span class="v">${escapeHtml(profileName)}</span></div>` +
+          `<div class="dialog-dump-item"><span class="k">${escapeHtml(t('entity.dump.colContext'))}</span><span class="v">${escapeHtml(entityName)}</span></div>` +
+          `</div></div>`;
+      }
+      return `<div class="dialog-dump-confirm">` +
+        `<p class="dialog-dump-lead">${escapeHtml(t('entity.dump.confirmLead'))}</p>` +
+        `<div class="dialog-dump-names">` +
+        `<div class="dialog-dump-item"><span class="k">${escapeHtml(t('entity.dump.colProfile'))}</span><span class="v">${escapeHtml(profileName)}</span></div>` +
+        `</div></div>`;
+    }
+
+    async function showDumpRunConfirm(profile, entityId) {
+      const canIngest = dumpProfileIngestAvailable(profile);
+      const result = await openDialog({
+        title: t('entity.dump.confirmTitle'),
+        messageHtml: dumpRunConfirmMessageHtml(profile, entityId),
+        okText: t('entity.dump.confirmOk'),
+        showCancel: true,
+        checkbox: canIngest
+          ? {
+            label: t('entity.dump.reindexAfter'),
+            hint: t('entity.dump.reindexHint'),
+            checked: true,
+          }
+          : null,
+      });
+      if (typeof result === 'object') return result;
+      return { ok: !!result, checked: true };
+    }
+
+    async function confirmAndRunDumpProfile(profileId, entityId) {
+      if (isDumpDockerBlocked()) {
+        return showAlert(t('dump.dockerHint'), t('dump.runError'));
+      }
+      const prof = dumpProfileById(profileId);
+      if (!prof) return;
+      const choice = await showDumpRunConfirm(prof, entityId);
+      if (!choice?.ok) return;
+      await runDumpProfile(prof.id, { submitParse: !!choice.checked });
+    }
+
+    function entityDumpActiveHtml(entityId) {
+      const active = entityDumpActiveById[Number(entityId)];
+      if (!active) return '';
+      const profName = escapeHtml(active.profile.name || '');
+      const status = escapeHtml(dumpRunStateLabel(active.run));
+      return `<span class="p dump-trace-line dump-trace-active">` +
+        `<span class="dump-trace-status">${status}</span>` +
+        `<span class="dump-trace-sep" aria-hidden="true">·</span>` +
+        `<a href="#" class="dump-trace-link" onclick="openEntityDumpProfile(event, ${Number(active.profile.id)})">${profName}</a>` +
+        `</span>`;
+    }
+
+    function entityDumpTraceHtml(entityId) {
+      const item = entityDumpTraceById[Number(entityId)];
+      if (!item) return '';
+      const run = item.run;
+      const when = (run.finished_at || run.started_at || '').trim();
+      if (!when) return '';
+      const profName = escapeHtml(item.profile.name || '');
+      const status = run.state === 'ok'
+        ? escapeHtml(entityDumpIngestTail(run) || dumpRunStateLabel(run))
+        : escapeHtml(dumpRunStateLabel(run));
+      return `<span class="p dump-trace-line dump-trace-done">` +
+        `<span class="dump-trace-when">${escapeHtml(t('entity.dump.tracePrefix'))} ${escapeHtml(when)}</span>` +
+        `<span class="dump-trace-sep" aria-hidden="true">·</span>` +
+        `<a href="#" class="dump-trace-link" onclick="openEntityDumpProfile(event, ${Number(item.profile.id)})">${profName}</a>` +
+        (status ? `<span class="dump-trace-sep" aria-hidden="true">·</span><span class="dump-trace-status">${status}</span>` : '') +
+        `</span>`;
+    }
+
+    function renderSourceDumpTrace(entityId) {
+      const el = document.getElementById('sourceDumpTrace');
+      if (!el) return;
+      const html = entityDumpActiveHtml(entityId) || entityDumpTraceHtml(entityId);
+      if (!html) {
+        el.hidden = true;
+        el.innerHTML = '';
+        return;
+      }
+      el.hidden = false;
+      el.innerHTML = html;
+    }
+
+    function dumpLastRunLabel(p) {
+      if (!p.last_run_at) return t('dump.lastRun.never');
+      const st = p.last_run_state || '';
+      return `${p.last_run_at} ${st}`;
+    }
+
+    async function fetchDumpProfiles() {
+      const res = await fetch('/api/dump/profiles');
+      if (!res.ok) throw new Error(await res.text());
+      dumpProfiles = await res.json();
+    }
+
+    async function fetchDumpRuns() {
+      const res = await fetch('/api/dump/runs?limit=50');
+      if (!res.ok) throw new Error(await res.text());
+      dumpRuns = await res.json();
+    }
+
+    function dumpPendingQueuePosition(index, hasRunning) {
+      return index + 1 + (hasRunning ? 1 : 0);
+    }
+
+    async function fetchDumpQueue() {
+      const res = await fetch('/api/dump/queue');
+      if (res.status === 404) {
+        const running = dumpRuns.find((r) => r.state === 'running') || null;
+        const pending = dumpRuns
+          .filter((r) => r.state === 'queued')
+          .sort((a, b) => {
+            const ao = Number(a.queue_order);
+            const bo = Number(b.queue_order);
+            if (Number.isFinite(ao) && Number.isFinite(bo) && ao !== bo) return ao - bo;
+            return Number(a.id) - Number(b.id);
+          });
+        const hasRunning = !!running;
+        dumpQueueSnapshot = {
+          running: running ? { ...running, queue_position: 0 } : null,
+          pending: pending.map((row, i) => ({
+            ...row,
+            queue_position: dumpPendingQueuePosition(i, hasRunning),
+          })),
+        };
+      } else if (!res.ok) {
+        throw new Error(await res.text());
+      } else {
+        dumpQueueSnapshot = await res.json();
+      }
+      const running = dumpQueueSnapshot?.running;
+      dumpActiveRunId = running ? running.id : (dumpQueueSnapshot?.pending?.[0]?.id || null);
+    }
+
+    async function loadDumpBoard() {
+      const hadActiveRun = !!dumpActiveRunId;
+      try {
+        await fetchDumpProfiles();
+        await fetchDumpRuns();
+        await fetchDumpQueue();
+      } catch (err) {
+        await showAlert(String(err.message || err), t('dialog.error'));
+        return;
+      }
+      const runJustFinished = hadActiveRun && !dumpActiveRunId;
+      const missingEntity = dumpProfiles.some(
+        (p) => p.entity_id && !entitiesById[Number(p.entity_id)]
+      );
+      if (runJustFinished || missingEntity) {
+        try {
+          await loadEntities({ force: true });
+        } catch (_) {}
+      }
+      renderDumpProfiles();
+      renderDumpHistory();
+      renderDumpQueue();
+      syncDumpDockerUi();
+    }
+
+    function pruneDumpSelection() {
+      const live = new Set(dumpProfiles.map((p) => p.id));
+      dumpSelectedProfileIds.forEach((id) => {
+        if (!live.has(id)) dumpSelectedProfileIds.delete(id);
+      });
+    }
+
+    function syncDumpSelectAllState() {
+      const selAll = document.getElementById('dumpSelectAll');
+      const all = document.querySelectorAll('.dump-row-check');
+      const checked = document.querySelectorAll('.dump-row-check:checked').length;
+      if (!selAll) return;
+      if (!all.length) {
+        selAll.checked = false;
+        selAll.indeterminate = false;
+        return;
+      }
+      selAll.checked = checked === all.length;
+      selAll.indeterminate = checked > 0 && checked < all.length;
+    }
+
+    function renderDumpProfiles() {
+      const body = document.getElementById('dumpProfilesBody');
+      const empty = document.getElementById('dumpProfilesEmpty');
+      if (!body) return;
+      pruneDumpSelection();
+      if (!dumpProfiles.length) {
+        body.innerHTML = '';
+        dumpSelectedProfileIds.clear();
+        syncDumpSelectAllState();
+        if (empty) empty.hidden = false;
+        syncDumpBatchButton();
+        return;
+      }
+      if (empty) empty.hidden = true;
+      body.innerHTML = dumpProfiles.map((p) => {
+        const blocked = isDumpDockerBlocked();
+        const outDir = p.out_dir || '';
+        const ctxName = dumpEntityName(p.entity_id);
+        return `<tr data-profile-id="${p.id}" title="${escapeAttr(t('dump.row.ctxTitle'))}">
+          <td><input type="checkbox" class="dump-row-check" data-id="${p.id}" aria-label="${escapeAttr(p.name)}" /></td>
+          <td class="dump-cell-clip"><button type="button" class="dump-profile-name dump-edit-btn" data-id="${p.id}" title="${escapeAttr(p.name)}" ${blocked ? 'disabled' : ''}>${escapeHtml(p.name)}</button></td>
+          <td class="dump-cell-clip" title="${escapeAttr(dumpTargetLabel(p))}">${escapeHtml(dumpTargetLabel(p))}</td>
+          <td class="mono dump-cell-clip" title="${escapeAttr(outDir)}">${escapeHtml(outDir)}</td>
+          <td class="dump-cell-clip" title="${escapeAttr(ctxName)}">${escapeHtml(ctxName)}${!p.entity_id ? ` <button type="button" class="btn secondary sm dump-create-ctx-btn" data-id="${p.id}" ${blocked ? 'disabled' : ''}>${escapeHtml(t('dump.createContext'))}</button>` : ''}</td>
+          <td class="dump-cell-clip" title="${escapeAttr(dumpLastRunLabel(p))}">${escapeHtml(dumpLastRunLabel(p))}</td>
+          <td class="col-actions dump-actions-cell">
+            <div class="actions actions-inner">
+              <button type="button" class="icon-btn primary-action on dump-run-btn" data-id="${p.id}" title="${escapeAttr(t('dump.ctx.run'))}" aria-label="${escapeAttr(t('dump.ctx.run'))}" ${blocked ? 'disabled' : ''}>${ICONS.dumpRun}</button>
+              <span class="act-sep" aria-hidden="true"></span>
+              <button type="button" class="icon-btn secondary icon dump-copy-btn" data-id="${p.id}" title="${escapeAttr(t('dump.ctx.copy'))}" aria-label="${escapeAttr(t('dump.ctx.copy'))}" ${blocked ? 'disabled' : ''}>${ICONS.copy}</button>
+              <span class="act-sep" aria-hidden="true"></span>
+              <button type="button" class="icon-btn danger icon dump-delete-btn" data-id="${p.id}" title="${escapeAttr(t('row.delete'))}" aria-label="${escapeAttr(t('row.delete'))}" ${blocked ? 'disabled' : ''}>${ICONS.trash}</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+      body.querySelectorAll('.dump-row-check').forEach((cb) => {
+        cb.checked = dumpSelectedProfileIds.has(Number(cb.dataset.id));
+      });
+      syncDumpSelectAllState();
+      syncDumpBatchButton();
+    }
+
+    function syncDumpBatchButton() {
+      const btn = document.getElementById('dumpRunSelectedBtn');
+      if (!btn) return;
+      const selected = dumpSelectedProfileIds.size;
+      btn.disabled = isDumpDockerBlocked() || selected === 0;
+    }
+
+    function renderDumpHistory() {
+      const root = document.getElementById('dumpHistory');
+      if (!root) return;
+      if (!dumpRuns.length) {
+        root.innerHTML = `<p class="hint">${escapeHtml(t('dump.lastRun.never'))}</p>`;
+        return;
+      }
+      root.innerHTML = dumpRuns.map((run) => {
+        const prof = dumpProfileById(run.profile_id);
+        const name = prof ? prof.name : `#${run.profile_id}`;
+        const dur = dumpRunDuration(run);
+        const stateCls = run.state === 'failed' ? 'dump-state-failed' : (run.ingest_state === 'blocked' ? 'dump-state-blocked' : '');
+        const bootstrap = run.bootstrap_note ? `<span class="dump-bootstrap-badge">${escapeHtml(t('dump.bootstrapNote'))}</span>` : '';
+        const reason = run.error_reason ? `<span class="muted">${escapeHtml(run.error_reason)}</span>` : '';
+        const expanded = dumpExpandedRunId === run.id;
+        const logBtn = run.log_tail ? `<span class="muted">${escapeHtml(expanded ? t('dump.history.hideLog') : t('dump.history.showLog'))}</span>` : '';
+        return `<div class="dump-history-item" data-run-id="${run.id}">
+          <div class="dump-history-head" data-run-id="${run.id}">
+            <span>${escapeHtml(run.started_at || run.finished_at || '')}</span>
+            <strong>${escapeHtml(name)}</strong>
+            <span class="${stateCls}">${escapeHtml(dumpRunStateLabel(run))}</span>
+            ${dur ? `<span class="muted">${escapeHtml(dur)}</span>` : ''}
+            ${bootstrap}
+            ${reason}
+            ${logBtn}
+          </div>
+          ${expanded && run.log_tail ? `<pre class="dump-log-tail">${escapeHtml(run.log_tail)}</pre>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    function dumpQueueItemHtml(run, { mode, position }) {
+      const name = escapeHtml(String(run.profile_name || dumpProfileById(run.profile_id)?.name || `#${run.profile_id}`));
+      const isPending = mode === 'pending';
+      const cls = isPending ? 'job-queue-item pending' : 'job-queue-item running';
+      const pos = isPending
+        ? (Number(position) || Number(run.queue_position) || 0)
+        : 0;
+      const elapsed = dumpRunDuration(run);
+      const meta = escapeHtml(
+        isPending
+          ? t('dump.queue.pending', { pos })
+          : t('dump.queue.running', { elapsed: elapsed || '0:00' }),
+      );
+      const posLbl = isPending ? String(pos) : '▶';
+      const grip = isPending
+        ? `<span class="job-queue-grip" title="Перетащить" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="1.4"/><circle cx="15" cy="7" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="17" r="1.4"/><circle cx="15" cy="17" r="1.4"/></svg></span>`
+        : '';
+      const reorder = isPending
+        ? `<div class="job-queue-actions">
+            <button type="button" class="secondary icon" data-dump-queue-move="up" data-run-id="${run.id}" title="Выше" aria-label="Выше">↑</button>
+            <button type="button" class="secondary icon" data-dump-queue-move="down" data-run-id="${run.id}" title="Ниже" aria-label="Ниже">↓</button>
+          </div>`
+        : '';
+      const cancelBtn = `<button type="button" class="danger job-queue-cancel dump-queue-cancel" data-dump-queue-cancel="${run.id}" data-dump-queue-running="${isPending ? '0' : '1'}">${escapeHtml(t('dump.current.cancel'))}</button>`;
+      return `<li class="${cls}" data-run-id="${run.id}"${isPending ? ' draggable="true"' : ''}>
+        ${grip}
+        <span class="job-queue-pos">${posLbl}</span>
+        <div class="job-queue-body">
+          <div class="job-queue-name">${name}</div>
+          <div class="job-queue-meta">${meta}</div>
+        </div>
+        ${reorder}
+        ${cancelBtn}
+      </li>`;
+    }
+
+    function renderDumpQueue() {
+      const panel = document.getElementById('dumpQueuePanel');
+      const runningEl = document.getElementById('dumpQueueRunning');
+      const logEl = document.getElementById('dumpQueueRunningLog');
+      const pendingEl = document.getElementById('dumpQueuePending');
+      const emptyEl = document.getElementById('dumpQueueEmpty');
+      if (!panel || !runningEl || !pendingEl || !emptyEl) return;
+      const snap = dumpQueueSnapshot || {};
+      const running = snap.running || null;
+      const pending = Array.isArray(snap.pending) ? snap.pending : [];
+      const hasAny = !!(running || pending.length);
+      panel.hidden = !hasAny;
+      if (!hasAny) {
+        runningEl.hidden = true;
+        runningEl.innerHTML = '';
+        if (logEl) { logEl.hidden = true; logEl.textContent = ''; }
+        pendingEl.innerHTML = '';
+        emptyEl.hidden = true;
+        return;
+      }
+      emptyEl.hidden = true;
+      if (running) {
+        runningEl.hidden = false;
+        runningEl.innerHTML = dumpQueueItemHtml(running, { mode: 'running' });
+        if (logEl) {
+          const tail = running.log_tail || '';
+          logEl.hidden = !tail;
+          logEl.textContent = tail;
+        }
+      } else {
+        runningEl.hidden = true;
+        runningEl.innerHTML = '';
+        if (logEl) { logEl.hidden = true; logEl.textContent = ''; }
+      }
+      const hasRunning = !!running;
+      pendingEl.innerHTML = pending.map((row, i) => dumpQueueItemHtml(row, {
+        mode: 'pending',
+        position: dumpPendingQueuePosition(i, hasRunning),
+      })).join('');
+      pendingEl.hidden = !pending.length;
+    }
+
+    async function saveDumpQueueOrder(runIds) {
+      const res = await fetch('/api/dump/queue/order', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_ids: runIds }),
+      });
+      if (res.status === 404) throw new Error(t('dump.serverNeedRestart'));
+      if (!res.ok) throw new Error(await res.text());
+      dumpQueueSnapshot = await res.json();
+      renderDumpQueue();
+    }
+
+    async function moveDumpQueueItem(runId, dir) {
+      const pending = [...(dumpQueueSnapshot?.pending || [])];
+      const idx = pending.findIndex((r) => Number(r.id) === Number(runId));
+      if (idx < 0) return;
+      const next = dir === 'up' ? idx - 1 : idx + 1;
+      if (next < 0 || next >= pending.length) return;
+      const ids = pending.map((r) => r.id);
+      const tmp = ids[idx];
+      ids[idx] = ids[next];
+      ids[next] = tmp;
+      try {
+        await saveDumpQueueOrder(ids);
+      } catch (err) {
+        showAlert(String(err.message || err), t('dump.queue.title'));
+      }
+    }
+
+    async function cancelDumpQueueItem(runId, running) {
+      const snap = dumpQueueSnapshot || {};
+      const row = Number(snap.running?.id) === Number(runId)
+        ? snap.running
+        : (snap.pending || []).find((r) => Number(r.id) === Number(runId));
+      const name = row?.profile_name || dumpProfileById(row?.profile_id)?.name || `#${runId}`;
+      if (running) {
+        const ok = await showConfirm(
+          t('dump.queue.cancelRunningConfirm', { name }),
+          { title: t('dump.current.cancel') },
+        );
+        if (!ok) return;
+      }
+      await cancelDumpRun(runId);
+    }
+
+    function startDumpPoll() {
+      stopDumpPoll();
+      const sec = Number(settings.ui_poll_interval_sec ?? 2);
+      if (!sec) return;
+      dumpPollTimer = setInterval(() => {
+        if (boardView !== 'dumps') return;
+        void loadDumpBoard();
+      }, sec * 1000);
+    }
+
+    function stopDumpPoll() {
+      if (dumpPollTimer) {
+        clearInterval(dumpPollTimer);
+        dumpPollTimer = null;
+      }
+    }
+
+    function syncOnecPlatformSettingsForm() {
+      const pathEl = document.getElementById('onecPlatformPath');
+      const rootEl = document.getElementById('dumpDefaultOutRoot');
+      if (pathEl) pathEl.value = settings.onec_platform_path || '';
+      if (rootEl) rootEl.value = settings.dump_default_out_root || '';
+      void refreshOnecPlatformVersionLabel();
+      syncDumpBrowseButtons();
+      syncDumpDockerUi();
+    }
+
+    async function refreshOnecPlatformVersionLabel() {
+      const el = document.getElementById('onecPlatformVersion');
+      const path = (document.getElementById('onecPlatformPath')?.value || '').trim();
+      if (!el) return;
+      if (!path) { el.textContent = ''; return; }
+      try {
+        const list = await fetch('/api/system/onec-platforms').then((r) => r.json());
+        const hit = (list || []).find((p) => String(p.path).toLowerCase() === path.toLowerCase());
+        el.textContent = hit && hit.version ? hit.version : '';
+      } catch (_) {
+        el.textContent = '';
+      }
+    }
+
+    async function saveOnecPlatformSettings() {
+      const pathVal = (document.getElementById('onecPlatformPath')?.value || '').trim();
+      const rootVal = (document.getElementById('dumpDefaultOutRoot')?.value || '').trim();
+      const payload = {
+        onec_platform_path: pathVal,
+        dump_default_out_root: rootVal,
+      };
+      const res = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return showAlert(await res.text(), t('dialog.error'));
+      try {
+        settings = await fetch('/api/settings').then((r) => r.json());
+      } catch (_) {
+        settings = { ...settings, ...(await res.json()) };
+      }
+      let saveWarn = '';
+      if (rootVal && !(settings.dump_default_out_root || '').trim()) {
+        settings.dump_default_out_root = rootVal;
+        saveWarn = t('dump.platform.saveNotPersisted');
+      }
+      if (pathVal && !(settings.onec_platform_path || '').trim()) {
+        settings.onec_platform_path = pathVal;
+        saveWarn = saveWarn || t('dump.platform.saveNotPersisted');
+      }
+      syncOnecPlatformSettingsForm();
+      await showAlert(
+        saveWarn ? `${t('dump.platform.saved')}\n\n${saveWarn}` : t('dump.platform.saved'),
+        t('appSettings.title')
+      );
+    }
+
+    async function detectOnecPlatform() {
+      if (isDumpDockerBlocked()) return;
+      let list;
+      try {
+        list = await fetch('/api/system/onec-platforms').then((r) => r.json());
+      } catch (err) {
+        return showAlert(String(err.message || err), t('dialog.error'));
+      }
+      if (!list || !list.length) return showAlert(t('dump.platform.none'), t('dump.platform.section'));
+      if (list.length === 1) {
+        document.getElementById('onecPlatformPath').value = list[0].path;
+        document.getElementById('onecPlatformVersion').textContent = list[0].version || '';
+        return;
+      }
+      const options = list.map((p, i) => `${i + 1}. ${p.version || '?'} — ${p.path}`).join('\n');
+      const pick = await showPrompt(`${t('dump.platform.pickTitle')}\n\n${options}`, {
+        title: t('dump.platform.detect'),
+        okText: t('dump.platform.pickOk'),
+        defaultValue: '1',
+      });
+      if (pick == null) return;
+      const idx = Math.max(0, Math.min(list.length - 1, parseInt(String(pick), 10) - 1));
+      if (!Number.isFinite(idx)) return;
+      document.getElementById('onecPlatformPath').value = list[idx].path;
+      document.getElementById('onecPlatformVersion').textContent = list[idx].version || '';
+    }
+
+    function composeServerIbAddress() {
+      const host = (document.getElementById('dumpProfIbServer')?.value || '').trim();
+      const base = (document.getElementById('dumpProfIbBase')?.value || '').trim();
+      if (!host && !base) return '';
+      return `Srvr="${host}";Ref="${base}";`;
+    }
+
+    function splitServerIbAddress(addr) {
+      const text = String(addr || '');
+      const srv = text.match(/Srvr="([^"]*)"/i);
+      const ref = text.match(/Ref="([^"]*)"/i);
+      return { host: srv ? srv[1] : '', base: ref ? ref[1] : text };
+    }
+
+    function syncDumpSegButtons(name) {
+      const val = document.querySelector(`input[name="${name}"]:checked`)?.value;
+      document.querySelectorAll(`.adv-preset-btn[data-dump-seg="${name}"]`).forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-value') === val);
+      });
+    }
+
+    function setDumpSeg(name, value) {
+      const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
+      if (radio) radio.checked = true;
+      syncDumpSegButtons(name);
+      syncDumpProfileFormUi();
+    }
+
+    function syncDumpPasswordUi() {
+      const input = document.getElementById('dumpProfPassword');
+      const tag = document.getElementById('dumpProfPasswordSavedTag');
+      const clearBtn = document.getElementById('dumpProfPasswordClearBtn');
+      if (!input) return;
+      const showStored = dumpPasswordMode === 'stored';
+      const showClear = dumpPasswordMode === 'stored' || dumpPasswordMode === 'editing'
+        || (dumpPasswordMode === 'empty' && !!input.value);
+      if (tag) tag.hidden = !showStored;
+      if (clearBtn) clearBtn.hidden = !showClear;
+      if (showStored && input.value !== DUMP_PWD_MASK) input.value = DUMP_PWD_MASK;
+    }
+
+    function resetDumpPasswordField(mode) {
+      dumpPasswordMode = mode;
+      const input = document.getElementById('dumpProfPassword');
+      if (!input) return;
+      if (mode === 'stored') {
+        input.value = DUMP_PWD_MASK;
+      } else {
+        input.value = '';
+      }
+      syncDumpPasswordUi();
+    }
+
+    function onDumpPasswordFocus() {
+      if (dumpPasswordMode === 'stored') {
+        dumpPasswordMode = 'editing';
+        const input = document.getElementById('dumpProfPassword');
+        if (input) input.value = '';
+        syncDumpPasswordUi();
+      }
+    }
+
+    function onDumpPasswordBlur() {
+      const input = document.getElementById('dumpProfPassword');
+      if (!input) return;
+      if (dumpPasswordMode === 'editing' && !input.value.trim() && dumpHasStoredPassword) {
+        dumpPasswordMode = 'stored';
+        input.value = DUMP_PWD_MASK;
+        syncDumpPasswordUi();
+      }
+    }
+
+    async function clearDumpPasswordField() {
+      const hasSomething = dumpPasswordMode === 'stored'
+        || dumpPasswordMode === 'editing'
+        || (document.getElementById('dumpProfPassword')?.value || '').trim();
+      if (!hasSomething) return;
+      const ok = await showConfirm(t('dump.profile.passwordClearConfirm'), {
+        title: t('dump.profile.password'),
+        okText: t('dump.profile.passwordClearOk'),
+        danger: true,
+      });
+      if (!ok) return;
+      dumpHasStoredPassword = false;
+      dumpPasswordMode = 'cleared';
+      const input = document.getElementById('dumpProfPassword');
+      if (input) input.value = '';
+      syncDumpPasswordUi();
+    }
+
+    function collectDumpPasswordPayload(payload) {
+      const input = document.getElementById('dumpProfPassword');
+      const raw = (input?.value || '');
+      if (dumpEditingId == null) {
+        if (raw && raw !== DUMP_PWD_MASK) payload.password = raw;
+        return;
+      }
+      if (dumpPasswordMode === 'cleared') {
+        payload.password = '';
+        return;
+      }
+      if (dumpPasswordMode === 'editing' && raw) {
+        payload.password = raw;
+      }
+    }
+
+    function passwordUsesStoredSecret() {
+      return dumpEditingId != null && dumpPasswordMode === 'stored';
+    }
+
+    function syncDumpProfileFormUi() {
+      ['dumpTargetType', 'dumpIbType', 'dumpMode', 'dumpPostAction'].forEach(syncDumpSegButtons);
+      const ext = (document.querySelector('input[name="dumpTargetType"]:checked')?.value || '') === 'extension';
+      const extField = document.getElementById('dumpExtensionField');
+      if (extField) extField.hidden = !ext;
+      const extLoadBtn = document.getElementById('dumpProfExtensionLoadBtn');
+      if (extLoadBtn) {
+        extLoadBtn.hidden = !ext;
+        extLoadBtn.disabled = false;
+      }
+      if (!ext) hideDumpExtensionSuggest();
+      const ibFile = (document.querySelector('input[name="dumpIbType"]:checked')?.value || 'file') === 'file';
+      const ibFileField = document.getElementById('dumpIbFileField');
+      if (ibFileField) ibFileField.hidden = !ibFile;
+      document.getElementById('dumpIbServerRow').hidden = ibFile;
+      document.getElementById('dumpProfPlatformOverrideRow').hidden = !dumpPlatformOverrideOpen;
+      const toggleBtn = document.getElementById('dumpProfPlatformToggle');
+      if (toggleBtn) {
+        toggleBtn.textContent = dumpPlatformOverrideOpen
+          ? t('dump.profile.platformUseShared')
+          : t('dump.profile.platformOverrideLink');
+      }
+      const full = (document.querySelector('input[name="dumpMode"]:checked')?.value || '') === 'full';
+      document.getElementById('dumpProfFullHint').hidden = !full;
+      const clearRow = document.getElementById('dumpProfClearRow');
+      if (clearRow) clearRow.hidden = !full;
+      if (!full) {
+        const clearCb = document.getElementById('dumpProfClearBeforeFull');
+        if (clearCb) clearCb.checked = false;
+      }
+      const clearOn = full && !!document.getElementById('dumpProfClearBeforeFull')?.checked;
+      const warn = document.getElementById('dumpProfClearWarn');
+      if (warn) {
+        if (full && clearOn) {
+          warn.hidden = false;
+          warn.textContent = t('dump.profile.clearWarn', { path: document.getElementById('dumpProfOutDir')?.value || '…' });
+        } else {
+          warn.hidden = true;
+          warn.textContent = '';
+        }
+      }
+      const post = document.querySelector('input[name="dumpPostAction"]:checked')?.value || 'import';
+      const entityField = document.getElementById('dumpProfEntityField');
+      if (entityField) entityField.hidden = post !== 'import';
+      const entitySel = document.getElementById('dumpProfEntityId');
+      if (entitySel) entitySel.disabled = post !== 'import';
+      const createHint = document.getElementById('dumpProfPostCreateHint');
+      if (createHint) createHint.hidden = post !== 'create_entity';
+      const ver = (settings.onec_platform_path && document.getElementById('onecPlatformVersion')?.textContent) || '';
+      const summary = document.getElementById('dumpProfPlatformSummary');
+      if (summary) {
+        summary.textContent = `${t('dump.profile.platformLine')} ${ver || '—'} ${t('dump.profile.platformSharedShort')}`;
+      }
+      syncDumpPasswordUi();
+      syncDumpBrowseButtons();
+    }
+
+    function fillDumpEntitySelect(selectedId) {
+      const sel = document.getElementById('dumpProfEntityId');
+      if (!sel) return;
+      const opts = ['<option value="">—</option>'].concat(
+        Object.values(entitiesById || {}).map((e) =>
+          `<option value="${e.id}">${escapeHtml(e.name || ('#' + e.id))}</option>`
+        )
+      );
+      const sid = selectedId ? Number(selectedId) : null;
+      if (sid && !Object.values(entitiesById || {}).some((e) => Number(e.id) === sid)) {
+        opts.push(`<option value="${sid}">${escapeHtml(dumpEntityName(sid))}</option>`);
+      }
+      sel.innerHTML = opts.join('');
+      if (sid) sel.value = String(sid);
+    }
+
+    function clearDumpPreflightBar() {
+      const bar = document.getElementById('dumpProfPreflightBar');
+      if (!bar) return;
+      bar.hidden = true;
+      bar.className = 'dump-preflight-bar';
+      bar.innerHTML = '';
+    }
+
+    async function openDumpProfileModal(id) {
+      dumpEditingId = id == null ? null : Number(id);
+      dumpHasStoredPassword = false;
+      dumpPlatformOverrideOpen = false;
+      fillDumpExtensionNames([]);
+      const deleteBtn = document.getElementById('dumpProfDeleteBtn');
+      const deleteSep = document.getElementById('dumpProfDeleteSep');
+      const editing = dumpEditingId != null;
+      if (deleteBtn) deleteBtn.hidden = !editing;
+      if (deleteSep) deleteSep.hidden = !editing;
+      clearDumpPreflightBar();
+      fillDumpEntitySelect(null);
+      if (dumpEditingId == null) {
+        resetDumpPasswordField('empty');
+        document.getElementById('dumpProfName').value = '';
+        document.getElementById('dumpProfComment').value = '';
+        document.querySelector('input[name="dumpTargetType"][value="configuration"]').checked = true;
+        document.getElementById('dumpProfExtension').value = '';
+        fillDumpExtensionNames([]);
+        document.querySelector('input[name="dumpIbType"][value="file"]').checked = true;
+        document.getElementById('dumpProfIbPath').value = '';
+        document.getElementById('dumpProfIbServer').value = '';
+        document.getElementById('dumpProfIbBase').value = '';
+        document.getElementById('dumpProfIbUser').value = '';
+        document.getElementById('dumpProfPlatformPath').value = '';
+        document.getElementById('dumpProfOutDir').value = settings.dump_default_out_root || '';
+        document.querySelector('input[name="dumpMode"][value="update"]').checked = true;
+        document.getElementById('dumpProfClearBeforeFull').checked = false;
+        document.querySelector('input[name="dumpPostAction"][value="import"]').checked = true;
+        document.getElementById('dumpProfTimeout').value = '2';
+      } else {
+        let p;
+        try {
+          p = await fetch(`/api/dump/profiles/${dumpEditingId}`).then((r) => r.json());
+        } catch (err) {
+          return showAlert(String(err.message || err), t('dialog.error'));
+        }
+        document.getElementById('dumpProfName').value = p.name || '';
+        document.getElementById('dumpProfComment').value = p.comment || '';
+        document.querySelector(`input[name="dumpTargetType"][value="${p.target_type || 'configuration'}"]`).checked = true;
+        document.getElementById('dumpProfExtension').value = p.extension_name || '';
+        document.querySelector(`input[name="dumpIbType"][value="${p.ib_type || 'file'}"]`).checked = true;
+        if ((p.ib_type || 'file') === 'server') {
+          const parts = splitServerIbAddress(p.ib_address);
+          document.getElementById('dumpProfIbServer').value = parts.host;
+          document.getElementById('dumpProfIbBase').value = parts.base;
+          document.getElementById('dumpProfIbPath').value = '';
+        } else {
+          document.getElementById('dumpProfIbPath').value = p.ib_address || '';
+        }
+        document.getElementById('dumpProfIbUser').value = p.ib_user || '';
+        dumpHasStoredPassword = !!p.has_password;
+        resetDumpPasswordField(dumpHasStoredPassword ? 'stored' : 'empty');
+        dumpPlatformOverrideOpen = !!(p.platform_path_override || '').trim();
+        document.getElementById('dumpProfPlatformPath').value = p.platform_path_override || '';
+        document.getElementById('dumpProfOutDir').value = p.out_dir || '';
+        document.querySelector(`input[name="dumpMode"][value="${p.dump_mode || 'update'}"]`).checked = true;
+        document.getElementById('dumpProfClearBeforeFull').checked = !!p.clear_before_full;
+        await loadEntities({ force: true });
+        const post = (p.post_action || '') === 'create_entity' ? 'create_entity' : 'import';
+        document.querySelector(`input[name="dumpPostAction"][value="${post}"]`).checked = true;
+        fillDumpEntitySelect(p.entity_id);
+        document.getElementById('dumpProfTimeout').value = String(Math.max(1, Math.round((p.timeout_sec || 7200) / 3600)));
+      }
+      syncDumpProfileFormUi();
+      dumpProfileModal.classList.add('open');
+      dumpProfileModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDumpProfileModal() {
+      if (!dumpProfileModal) return;
+      dumpProfileModal.classList.remove('open');
+      dumpProfileModal.setAttribute('aria-hidden', 'true');
+      dumpEditingId = null;
+    }
+
+    function collectDumpProfilePayload() {
+      const ibType = document.querySelector('input[name="dumpIbType"]:checked')?.value || 'file';
+      const ibAddress = ibType === 'file'
+        ? (document.getElementById('dumpProfIbPath')?.value || '').trim()
+        : composeServerIbAddress();
+      const postAction = document.querySelector('input[name="dumpPostAction"]:checked')?.value || 'import';
+      const entityRaw = document.getElementById('dumpProfEntityId')?.value || '';
+      const payload = {
+        name: (document.getElementById('dumpProfName')?.value || '').trim(),
+        comment: (document.getElementById('dumpProfComment')?.value || '').trim(),
+        target_type: document.querySelector('input[name="dumpTargetType"]:checked')?.value || 'configuration',
+        extension_name: (document.getElementById('dumpProfExtension')?.value || '').trim(),
+        ib_type: ibType,
+        ib_address: ibAddress,
+        ib_user: (document.getElementById('dumpProfIbUser')?.value || '').trim(),
+        platform_path_override: dumpPlatformOverrideOpen
+          ? (document.getElementById('dumpProfPlatformPath')?.value || '').trim()
+          : '',
+        out_dir: (document.getElementById('dumpProfOutDir')?.value || '').trim(),
+        dump_mode: document.querySelector('input[name="dumpMode"]:checked')?.value || 'update',
+        clear_before_full: !!document.getElementById('dumpProfClearBeforeFull')?.checked,
+        post_action: postAction === 'create_entity' ? 'create_entity' : (postAction === 'import' ? 'import' : ''),
+        entity_id: postAction === 'import' && entityRaw ? Number(entityRaw) : null,
+        timeout_sec: Math.max(3600, Math.min(86400, Number(document.getElementById('dumpProfTimeout')?.value || 2) * 3600)),
+      };
+      collectDumpPasswordPayload(payload);
+      return payload;
+    }
+
+    function renderPreflightBox(data) {
+      const bar = document.getElementById('dumpProfPreflightBar');
+      if (!bar) return;
+      const errors = data.errors || [];
+      const warnings = data.warnings || [];
+      const parts = [];
+      if (errors.length) {
+        errors.forEach((e) => parts.push(`<div class="err">${escapeHtml(e)}</div>`));
+        bar.className = 'dump-preflight-bar is-err';
+      } else if (warnings.length) {
+        warnings.forEach((w) => parts.push(`<div class="warn">${escapeHtml(w)}</div>`));
+        bar.className = 'dump-preflight-bar is-warn';
+      } else if (data.ok) {
+        parts.push(`<div class="ok">${escapeHtml(t('dump.profile.preflightOk'))}</div>`);
+        bar.className = 'dump-preflight-bar is-ok';
+      } else {
+        bar.className = 'dump-preflight-bar';
+      }
+      bar.innerHTML = parts.join('');
+      bar.hidden = !parts.length;
+    }
+
+    function hideDumpExtensionSuggest() {
+      dumpExtensionSuggestOpen = false;
+      const box = document.getElementById('dumpProfExtensionSuggest');
+      const input = document.getElementById('dumpProfExtension');
+      if (box) {
+        box.hidden = true;
+        box.innerHTML = '';
+      }
+      if (input) input.setAttribute('aria-expanded', 'false');
+    }
+
+    function filteredDumpExtensionNames() {
+      const q = (document.getElementById('dumpProfExtension')?.value || '').trim().toLowerCase();
+      const src = dumpExtensionNames || [];
+      if (!q) return src.slice(0, 50);
+      return src.filter((n) => n.toLowerCase().includes(q)).slice(0, 50);
+    }
+
+    function renderDumpExtensionSuggest(forceShow) {
+      const box = document.getElementById('dumpProfExtensionSuggest');
+      const input = document.getElementById('dumpProfExtension');
+      if (!box || !input) return;
+      const items = filteredDumpExtensionNames();
+      if (!items.length || (!forceShow && !dumpExtensionSuggestOpen)) {
+        hideDumpExtensionSuggest();
+        return;
+      }
+      dumpExtensionSuggestOpen = true;
+      box.innerHTML = items.map((n) =>
+        `<button type="button" class="dump-extension-suggest-item" role="option">${escapeHtml(n)}</button>`
+      ).join('');
+      box.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function fillDumpExtensionNames(names) {
+      dumpExtensionNames = (names || []).slice();
+      renderDumpExtensionSuggest(dumpExtensionSuggestOpen);
+    }
+
+    async function loadDumpExtensionsFromIb() {
+      const btn = document.getElementById('dumpProfExtensionLoadBtn');
+      if (btn) btn.disabled = true;
+      try {
+        let res;
+        if (passwordUsesStoredSecret()) {
+          res = await fetch(`/api/dump/profiles/${dumpEditingId}/list-extensions`, { method: 'POST' });
+        } else {
+          const payload = collectDumpProfilePayload();
+          res = await fetch('/api/dump/list-extensions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ib_type: payload.ib_type,
+              ib_address: payload.ib_address,
+              ib_user: payload.ib_user,
+              password: payload.password,
+              platform_path_override: payload.platform_path_override,
+            }),
+          });
+        }
+        if (!res.ok) return showAlert(await res.text(), t('dialog.error'));
+        const data = await res.json();
+        if (data.error) return showAlert(data.error, t('dump.profile.extensionLoadError'));
+        const names = data.extensions || [];
+        fillDumpExtensionNames(names);
+        const input = document.getElementById('dumpProfExtension');
+        if (input && names.length === 1) input.value = names[0];
+        else if (input && names.length && !input.value.trim()) input.value = names[0];
+        if (names.length > 1) renderDumpExtensionSuggest(true);
+      } catch (err) {
+        showAlert(String(err.message || err), t('dialog.error'));
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function preflightDumpProfile() {
+      const payload = collectDumpProfilePayload();
+      if (passwordUsesStoredSecret()) {
+        const resStored = await fetch(`/api/dump/profiles/${dumpEditingId}/preflight`, { method: 'POST' });
+        if (!resStored.ok) return showAlert(await resStored.text(), t('dialog.error'));
+        renderPreflightBox(await resStored.json());
+        return;
+      }
+      const res = await fetch('/api/dump/preflight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return showAlert(await res.text(), t('dialog.error'));
+      renderPreflightBox(await res.json());
+    }
+
+    async function saveDumpProfile() {
+      const payload = collectDumpProfilePayload();
+      if (!payload.name) return showAlert(t('dump.profile.name'), t('dialog.error'));
+      const url = dumpEditingId == null ? '/api/dump/profiles' : `/api/dump/profiles/${dumpEditingId}`;
+      const method = dumpEditingId == null ? 'POST' : 'PATCH';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return showAlert(await res.text(), t('dump.profile.saveError'));
+      closeDumpProfileModal();
+      await loadDumpBoard();
+    }
+
+    async function copyDumpProfileById(id) {
+      if (isDumpDockerBlocked()) return;
+      const p = dumpProfileById(id);
+      if (!p) return;
+      try {
+        const res = await fetch(`/api/dump/profiles/${id}/copy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!res.ok) {
+          if (res.status === 404) throw new Error(t('dump.serverNeedRestart'));
+          throw new Error(await res.text());
+        }
+        const created = await res.json();
+        await showAlert(t('dump.copyOk', { name: created.name || '' }), t('dialog.ok'));
+        await loadDumpBoard();
+      } catch (err) {
+        showAlert(String(err.message || err), t('dialog.error'));
+      }
+    }
+
+    async function deleteDumpProfileById(id) {
+      const p = dumpProfileById(id);
+      if (!p) return;
+      const ok = await showConfirm(t('dump.profile.deleteConfirm', { name: p.name }), {
+        title: t('dump.profile.delete'),
+        okText: t('delete.ok'),
+        danger: true,
+      });
+      if (!ok) return;
+      const res = await fetch(`/api/dump/profiles/${id}`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 204) return showAlert(await res.text(), t('dialog.error'));
+      dumpSelectedProfileIds.delete(id);
+      await loadDumpBoard();
+    }
+
+    async function deleteDumpProfile() {
+      if (dumpEditingId == null) return;
+      const id = dumpEditingId;
+      await deleteDumpProfileById(id);
+      closeDumpProfileModal();
+    }
+
+    async function runDumpProfileForEntity(entityId, profileId) {
+      let prof = null;
+      if (profileId) prof = dumpProfileById(profileId);
+      else {
+        const list = dumpProfilesForEntity(entityId);
+        prof = list[0] || null;
+      }
+      if (!prof) return showAlert(t('entity.dump.noProfile'), t('dump.runError'));
+      await confirmAndRunDumpProfile(prof.id, entityId);
+    }
+
+    async function runDumpProfile(id, opts) {
+      const submitParse = opts?.submitParse !== false;
+      const res = await fetch(`/api/dump/profiles/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submit_parse: submitParse }),
+      });
+      if (!res.ok) return showAlert(await res.text(), t('dump.runError'));
+      await refreshEntityDumpState();
+      boardRenderSig = '';
+      if (boardView === 'dumps') await loadDumpBoard();
+      else await loadEntities({ force: true });
+    }
+
+    async function runDumpBatch() {
+      const ids = Array.from(dumpSelectedProfileIds);
+      if (!ids.length) return showAlert(t('dump.batchNone'), t('dump.title'));
+      const res = await fetch('/api/dump/run-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_ids: ids }),
+      });
+      if (!res.ok) return showAlert(await res.text(), t('dump.runError'));
+      await refreshEntityDumpState();
+      boardRenderSig = '';
+      await loadDumpBoard();
+      if (boardView !== 'dumps') await loadEntities({ force: true });
+    }
+
+    async function cancelDumpRun(runId) {
+      const res = await fetch(`/api/dump/runs/${runId}/cancel`, { method: 'POST' });
+      if (!res.ok) return showAlert(await res.text(), t('dump.cancelError'));
+      await loadDumpBoard();
+    }
+
+    document.getElementById('dumpAddProfileBtn')?.addEventListener('click', () => openDumpProfileModal(null));
+    document.getElementById('closeDumpProfileModal')?.addEventListener('click', closeDumpProfileModal);
+    document.getElementById('dumpProfCancelBtn')?.addEventListener('click', closeDumpProfileModal);
+    document.getElementById('dumpProfSaveBtn')?.addEventListener('click', () => void saveDumpProfile());
+    document.getElementById('dumpProfCheckBtn')?.addEventListener('click', () => void preflightDumpProfile());
+    document.getElementById('dumpProfExtensionLoadBtn')?.addEventListener('click', () => void loadDumpExtensionsFromIb());
+    document.getElementById('dumpProfExtension')?.addEventListener('focus', () => {
+      if (dumpExtensionNames.length) renderDumpExtensionSuggest(true);
+    });
+    document.getElementById('dumpProfExtension')?.addEventListener('input', () => {
+      if (dumpExtensionNames.length) renderDumpExtensionSuggest(true);
+    });
+    document.getElementById('dumpProfExtension')?.addEventListener('blur', () => {
+      window.setTimeout(hideDumpExtensionSuggest, 150);
+    });
+    document.getElementById('dumpProfExtensionSuggest')?.addEventListener('mousedown', (ev) => {
+      const item = ev.target.closest('.dump-extension-suggest-item');
+      if (!item) return;
+      ev.preventDefault();
+      const input = document.getElementById('dumpProfExtension');
+      if (input) input.value = item.textContent || '';
+      hideDumpExtensionSuggest();
+    });
+    document.getElementById('dumpProfDeleteBtn')?.addEventListener('click', () => void deleteDumpProfile());
+    document.getElementById('dumpProfPassword')?.addEventListener('focus', onDumpPasswordFocus);
+    document.getElementById('dumpProfPassword')?.addEventListener('blur', onDumpPasswordBlur);
+    document.getElementById('dumpProfPasswordClearBtn')?.addEventListener('click', () => void clearDumpPasswordField());
+    document.getElementById('dumpProfPlatformToggle')?.addEventListener('click', () => {
+      dumpPlatformOverrideOpen = !dumpPlatformOverrideOpen;
+      if (!dumpPlatformOverrideOpen) {
+        document.getElementById('dumpProfPlatformPath').value = '';
+      }
+      syncDumpProfileFormUi();
+      if (dumpPlatformOverrideOpen) document.getElementById('dumpProfPlatformPath')?.focus();
+    });
+    document.querySelectorAll('.adv-preset-btn[data-dump-seg]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setDumpSeg(btn.getAttribute('data-dump-seg'), btn.getAttribute('data-value'));
+      });
+    });
+    document.getElementById('dumpRunSelectedBtn')?.addEventListener('click', () => void runDumpBatch());
+    document.getElementById('dumpQueuePanel')?.addEventListener('click', (ev) => {
+      const cancelBtn = ev.target.closest('[data-dump-queue-cancel]');
+      if (cancelBtn) {
+        void cancelDumpQueueItem(
+          Number(cancelBtn.getAttribute('data-dump-queue-cancel')),
+          cancelBtn.getAttribute('data-dump-queue-running') === '1',
+        );
+        return;
+      }
+      const moveBtn = ev.target.closest('[data-dump-queue-move]');
+      if (moveBtn) {
+        void moveDumpQueueItem(
+          Number(moveBtn.getAttribute('data-run-id')),
+          moveBtn.getAttribute('data-dump-queue-move'),
+        );
+      }
+    });
+    const dumpQueuePendingEl = document.getElementById('dumpQueuePending');
+    function clearDumpQueueDragUi() {
+      document.querySelectorAll('#dumpQueuePending .job-queue-item.drag-over').forEach((el) => el.classList.remove('drag-over'));
+      document.querySelectorAll('#dumpQueuePending .job-queue-item.is-dragging').forEach((el) => el.classList.remove('is-dragging'));
+    }
+    dumpQueuePendingEl?.addEventListener('dragstart', (ev) => {
+      const li = ev.target.closest('.job-queue-item.pending');
+      if (!li) return;
+      dumpQueueDragId = Number(li.getAttribute('data-run-id'));
+      li.classList.add('is-dragging');
+      if (ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', String(dumpQueueDragId || ''));
+      }
+    });
+    dumpQueuePendingEl?.addEventListener('dragover', (ev) => {
+      const li = ev.target.closest('.job-queue-item.pending');
+      if (!li || !dumpQueueDragId) return;
+      ev.preventDefault();
+      document.querySelectorAll('#dumpQueuePending .job-queue-item.drag-over').forEach((el) => {
+        if (el !== li) el.classList.remove('drag-over');
+      });
+      li.classList.add('drag-over');
+    });
+    dumpQueuePendingEl?.addEventListener('dragleave', (ev) => {
+      const li = ev.target.closest('.job-queue-item.pending');
+      if (li) li.classList.remove('drag-over');
+    });
+    dumpQueuePendingEl?.addEventListener('drop', async (ev) => {
+      ev.preventDefault();
+      const li = ev.target.closest('.job-queue-item.pending');
+      if (!li || !dumpQueueDragId) return;
+      const targetId = Number(li.getAttribute('data-run-id'));
+      if (!targetId || targetId === dumpQueueDragId) return;
+      const ids = (dumpQueueSnapshot?.pending || []).map((r) => r.id);
+      const from = ids.indexOf(dumpQueueDragId);
+      const to = ids.indexOf(targetId);
+      if (from < 0 || to < 0) return;
+      ids.splice(from, 1);
+      ids.splice(to, 0, dumpQueueDragId);
+      dumpQueueDragId = null;
+      clearDumpQueueDragUi();
+      try {
+        await saveDumpQueueOrder(ids);
+      } catch (err) {
+        showAlert(String(err.message || err), t('dump.queue.title'));
+      }
+    });
+    dumpQueuePendingEl?.addEventListener('dragend', () => {
+      dumpQueueDragId = null;
+      clearDumpQueueDragUi();
+    });
+    document.getElementById('dumpSelectAll')?.addEventListener('change', (ev) => {
+      const on = !!ev.target.checked;
+      dumpSelectedProfileIds.clear();
+      if (on) dumpProfiles.forEach((p) => dumpSelectedProfileIds.add(p.id));
+      document.querySelectorAll('.dump-row-check').forEach((cb) => { cb.checked = on; });
+      syncDumpSelectAllState();
+      syncDumpBatchButton();
+    });
+    document.getElementById('dumpProfilesBody')?.addEventListener('change', (ev) => {
+      if (!ev.target.classList?.contains('dump-row-check')) return;
+      const id = Number(ev.target.dataset.id);
+      if (ev.target.checked) dumpSelectedProfileIds.add(id);
+      else dumpSelectedProfileIds.delete(id);
+      syncDumpSelectAllState();
+      syncDumpBatchButton();
+    });
+    async function createContextFromDump(profileId) {
+      const p = dumpProfileById(profileId);
+      if (!p || p.entity_id) return;
+      const outDir = (p.out_dir || '').trim();
+      if (!outDir) return showAlert(t('dump.createContext') + ': out_dir', t('dialog.error'));
+      let peek = { name: p.name || '' };
+      try {
+        const pr = await fetch('/api/system/peek-source?source_path=' + encodeURIComponent(outDir));
+        if (pr.ok) peek = await pr.json();
+      } catch (_) {}
+      const choice = await openIngestProfileDialog('dump', cloneProfile(DEFAULT_INGEST_PROFILE), {
+        initialName: peek.name || p.name,
+        initialPath: outDir,
+        sourceLocation: 'path',
+        skipDeliveryCheck: true,
+      });
+      if (!choice) return;
+      try {
+        const res = await fetch(`/api/dump/profiles/${profileId}/create-context`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: choice.name,
+            ingest_profile: JSON.stringify(choice.profile),
+          }),
+        });
+        if (!res.ok) {
+          if (res.status === 404) throw new Error(t('dump.serverNeedRestart'));
+          throw new Error(await res.text());
+        }
+        const updated = await res.json();
+        const idx = dumpProfiles.findIndex((x) => Number(x.id) === Number(profileId));
+        if (idx >= 0) dumpProfiles[idx] = updated;
+        await showAlert(t('dump.createContextOk'), t('dialog.ok'));
+        await loadEntities({ force: true });
+        await loadDumpBoard();
+      } catch (err) {
+        showAlert(String(err.message || err), t('dialog.error'));
+      }
+    }
+
+    document.getElementById('dumpProfilesBody')?.addEventListener('click', (ev) => {
+      const runBtn = ev.target.closest('.dump-run-btn');
+      if (runBtn) {
+        const pid = Number(runBtn.dataset.id);
+        const p = dumpProfileById(pid);
+        return void confirmAndRunDumpProfile(pid, p?.entity_id || null);
+      }
+      const copyBtn = ev.target.closest('.dump-copy-btn');
+      if (copyBtn) return void copyDumpProfileById(Number(copyBtn.dataset.id));
+      const delBtn = ev.target.closest('.dump-delete-btn');
+      if (delBtn) return void deleteDumpProfileById(Number(delBtn.dataset.id));
+      const editBtn = ev.target.closest('.dump-edit-btn');
+      if (editBtn) return void openDumpProfileModal(Number(editBtn.dataset.id));
+      const ctxBtn = ev.target.closest('.dump-create-ctx-btn');
+      if (ctxBtn) return void createContextFromDump(Number(ctxBtn.dataset.id));
+    });
+    document.getElementById('dumpProfilesTable')?.addEventListener('contextmenu', (ev) => {
+      const tr = ev.target.closest('#dumpProfilesBody tr[data-profile-id]');
+      if (!tr) return;
+      ev.preventDefault();
+      openDumpCtxMenu(Number(tr.dataset.profileId), ev.clientX, ev.clientY);
+    });
+    document.getElementById('dumpHistory')?.addEventListener('click', (ev) => {
+      const head = ev.target.closest('.dump-history-head');
+      if (!head) return;
+      const id = Number(head.dataset.runId);
+      dumpExpandedRunId = dumpExpandedRunId === id ? null : id;
+      renderDumpHistory();
+    });
+    dumpProfileModal?.addEventListener('click', (ev) => {
+      if (ev.target.id === 'dumpProfileModal') closeDumpProfileModal();
+    });
+    document.getElementById('dumpProfClearBeforeFull')?.addEventListener('change', syncDumpProfileFormUi);
+    document.getElementById('dumpProfClearBeforeFull')?.addEventListener('change', syncDumpProfileFormUi);
+    document.getElementById('dumpProfOutDir')?.addEventListener('input', syncDumpProfileFormUi);
+    document.getElementById('saveOnecPlatformBtn')?.addEventListener('click', () => void saveOnecPlatformSettings());
+    document.getElementById('onecPlatformDetectBtn')?.addEventListener('click', () => void detectOnecPlatform());
+    document.getElementById('onecPlatformPath')?.addEventListener('change', () => void refreshOnecPlatformVersionLabel());
+    document.getElementById('onecPlatformBrowseBtn')?.addEventListener('click', async () => {
+      const p = await pickNativePath('file', document.getElementById('onecPlatformPath')?.value);
+      if (p) {
+        document.getElementById('onecPlatformPath').value = p;
+        void refreshOnecPlatformVersionLabel();
+      }
+    });
+    document.getElementById('dumpDefaultOutBrowseBtn')?.addEventListener('click', async () => {
+      const p = await pickNativePath('directory', document.getElementById('dumpDefaultOutRoot')?.value);
+      if (p) document.getElementById('dumpDefaultOutRoot').value = p;
+    });
+    document.getElementById('dumpProfIbBrowseBtn')?.addEventListener('click', async () => {
+      const p = await pickNativePath('directory', document.getElementById('dumpProfIbPath')?.value);
+      if (p) document.getElementById('dumpProfIbPath').value = p;
+    });
+    document.getElementById('dumpProfOutBrowseBtn')?.addEventListener('click', async () => {
+      const p = await pickNativePath('directory', document.getElementById('dumpProfOutDir')?.value);
+      if (p) document.getElementById('dumpProfOutDir').value = p;
+    });
+    document.getElementById('dumpProfPlatformBrowseBtn')?.addEventListener('click', async () => {
+      const p = await pickNativePath('file', document.getElementById('dumpProfPlatformPath')?.value);
+      if (p) document.getElementById('dumpProfPlatformPath').value = p;
+    });
 
     loadSettings().then(() => loadEntities({ force: true }));
     loadRuntimeInfo();

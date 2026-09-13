@@ -25,6 +25,8 @@ KEY_SLOW_REQUEST_MS = "slow_request_ms"
 KEY_APP_LOG_RETAIN_DAYS = "app_log_retain_days"
 KEY_APP_LOG_MAX_ROWS = "app_log_max_rows"
 KEY_APP_LOG_ENABLED = "app_log_enabled"
+KEY_ONEC_PLATFORM_PATH = "onec_platform_path"
+KEY_DUMP_DEFAULT_OUT_ROOT = "dump_default_out_root"
 ALLOWED_EMBEDDING_WORKERS = frozenset({1, 2, 4, 8, 12, 16})
 # 0 = off; otherwise seconds between entity list polls
 ALLOWED_UI_POLL_INTERVAL_SEC = frozenset({0, 2, 3, 5, 10, 15, 30, 60})
@@ -203,6 +205,14 @@ def get_app_log_max_rows() -> int:
     return max(MIN_MAX_ROWS, min(MAX_MAX_ROWS, n))
 
 
+def get_onec_platform_path() -> str:
+    return get_setting(KEY_ONEC_PLATFORM_PATH, "")
+
+
+def get_dump_default_out_root() -> str:
+    return get_setting(KEY_DUMP_DEFAULT_OUT_ROOT, "")
+
+
 def get_bsl_embed_limits() -> dict[str, int]:
     from app.services.bsl_embed import default_bsl_embed_limits, normalize_bsl_embed_limits
 
@@ -303,6 +313,8 @@ def get_all() -> dict:
         "bsl_embed_limits_bounds": bsl_embed_limits_bounds(),
         "bsl_embed_window_presets": bsl_embed_window_presets(),
         "embed_model_window_presets": embed_model_window_presets(),
+        "onec_platform_path": get_onec_platform_path(),
+        "dump_default_out_root": get_dump_default_out_root(),
     }
 
 
@@ -327,6 +339,8 @@ def update(
     bsl_chunk_overlap: int | None = None,
     bsl_min_body_chars: int | None = None,
     bsl_max_chunks: int | None = None,
+    onec_platform_path: str | None = None,
+    dump_default_out_root: str | None = None,
 ) -> dict:
     if lm_studio_url is not None:
         url = lm_studio_url.strip().rstrip("/")
@@ -398,4 +412,8 @@ def update(
             min_body_chars=bsl_min_body_chars,
             max_chunks=bsl_max_chunks,
         )
+    if onec_platform_path is not None:
+        set_setting(KEY_ONEC_PLATFORM_PATH, onec_platform_path.strip())
+    if dump_default_out_root is not None:
+        set_setting(KEY_DUMP_DEFAULT_OUT_ROOT, dump_default_out_root.strip())
     return get_all()

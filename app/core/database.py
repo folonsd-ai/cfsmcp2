@@ -168,6 +168,11 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("objects", "source_rel", "TEXT NOT NULL DEFAULT ''"),
     ("objects", "bsl_embed_gen", "INTEGER NOT NULL DEFAULT 0"),
     ("objects", "guid", "TEXT NOT NULL DEFAULT ''"),
+    ("dump_runs", "ingest_state", "TEXT NOT NULL DEFAULT ''"),
+    ("dump_runs", "bootstrap_note", "TEXT NOT NULL DEFAULT ''"),
+    ("dump_runs", "file_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("dump_runs", "queue_order", "REAL NOT NULL DEFAULT 0"),
+    ("dump_runs", "submit_parse", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 
@@ -295,6 +300,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     for table, column, decl in _MIGRATIONS:
         if _table_exists(conn, table) and not _column_exists(conn, table, column):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    if _table_exists(conn, "dump_runs") and _column_exists(conn, "dump_runs", "queue_order"):
+        conn.execute(
+            """
+            UPDATE dump_runs SET queue_order = id
+            WHERE state IN ('queued', 'running') AND queue_order = 0
+            """
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS objects (
@@ -427,6 +439,59 @@ def migrate(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_app_log_tier_ts ON app_log(tier, ts DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dump_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          comment TEXT NOT NULL DEFAULT '',
+          target_type TEXT NOT NULL DEFAULT 'configuration',
+          extension_name TEXT NOT NULL DEFAULT '',
+          ib_type TEXT NOT NULL DEFAULT 'file',
+          ib_address TEXT NOT NULL DEFAULT '',
+          ib_user TEXT NOT NULL DEFAULT '',
+          secret_blob BLOB,
+          platform_path_override TEXT NOT NULL DEFAULT '',
+          out_dir TEXT NOT NULL DEFAULT '',
+          dump_mode TEXT NOT NULL DEFAULT 'update',
+          clear_before_full INTEGER NOT NULL DEFAULT 0,
+          post_action TEXT NOT NULL DEFAULT '',
+          entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL,
+          timeout_sec INTEGER NOT NULL DEFAULT 7200,
+          last_run_state TEXT NOT NULL DEFAULT '',
+          last_run_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dump_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES dump_profiles(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'queued',
+          started_at TEXT NOT NULL DEFAULT '',
+          finished_at TEXT NOT NULL DEFAULT '',
+          return_code INTEGER,
+          error_reason TEXT NOT NULL DEFAULT '',
+          log_path TEXT NOT NULL DEFAULT '',
+          log_tail TEXT NOT NULL DEFAULT '',
+          last_activity_at REAL NOT NULL DEFAULT 0,
+          ingest_state TEXT NOT NULL DEFAULT '',
+          bootstrap_note TEXT NOT NULL DEFAULT '',
+          file_count INTEGER NOT NULL DEFAULT 0,
+          queue_order REAL NOT NULL DEFAULT 0,
+          submit_parse INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dump_runs_profile ON dump_runs(profile_id, id DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dump_runs_state ON dump_runs(state, last_activity_at)"
     )
     conn.commit()
 

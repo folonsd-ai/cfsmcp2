@@ -1,6 +1,6 @@
 [project]
 name = "cfsmcp2"
-version = "0.2.30"
+version = "0.2.32"
 description = "MCP server and UI for 1C metadata and BSL search"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -20,6 +20,13 @@ portable = [
     "pystray>=0.19",
     "pillow>=10.0",
 ]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [project.scripts]
 cfsmcp2 = "app.main:run"

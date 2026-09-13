@@ -841,6 +841,7 @@ _UI_POLL_API_PATHS = frozenset(
         "/api/system/runtime",
         "/api/system/browse",
         "/api/system/mcp-busy",
+        "/api/dump/runs",
     }
 )
 

@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api import dump as dump_api
 from app.api import entities as entities_api
 from app.api import health as health_api
 from app.api import settings as settings_api
@@ -17,10 +18,13 @@ from app.api import stats as stats_api
 from app.api import system as system_api
 from app.api import tags as tags_api
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import connect, init_db
 from app.core.paths import resolve_static_dir
 from app.core.version import APP_VERSION
 from app.mcp.server import mcp
+from app.services.dump_recovery import recover_orphaned_dump_runs, recover_pending_create_entities
+from app.services.dump_worker import get_worker
+from app.services.mounts import effective_runtime_mode
 from app.services.pipeline import backfill_entity_types, cleanup_metadata_orphans, recover_interrupted_indexing
 from app.services.usage_stats import is_important_api, is_ui_poll_api, usage_stats
 
@@ -42,6 +46,18 @@ async def lifespan(app: FastAPI):
     n_resume = recover_interrupted_indexing()
     if n_resume:
         log.info("resumed %s interrupted indexing job(s)", n_resume)
+    conn = connect(settings.db_path)
+    try:
+        n_dump = recover_orphaned_dump_runs(conn)
+        if n_dump:
+            log.info("recovered %s orphaned dump run(s)", n_dump)
+        n_create = recover_pending_create_entities(conn)
+        if n_create:
+            log.info("recovered %s pending create_entity profile(s)", n_create)
+    finally:
+        conn.close()
+    if effective_runtime_mode() != "docker":
+        get_worker().start()
     async with mcp_app.lifespan(app):
         usage_stats.record_lifecycle(
             "start",
@@ -49,6 +65,8 @@ async def lifespan(app: FastAPI):
         )
         log.info("cfsmcp2 ready on %s:%s mcp=/mcp", settings.host, settings.port)
         yield
+        if effective_runtime_mode() != "docker":
+            get_worker().shutdown()
         usage_stats.record_lifecycle("stop", "app shutdown")
 
 
@@ -60,6 +78,7 @@ def create_app() -> FastAPI:
     api.include_router(settings_api.router)
     api.include_router(stats_api.router)
     api.include_router(system_api.router)
+    api.include_router(dump_api.router)
 
     @api.middleware("http")
     async def mcp_trailing_slash(request: Request, call_next):

@@ -1,6 +1,6 @@
 # ARCHITECTURE — cfsmcp2
 
-Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.30**
+Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.32**
 
 ---
 
@@ -17,7 +17,7 @@
 | Path-режим | `source_location=path` без копирования; в Docker — **точки** `MOUNT_POINTS` |
 | MCP | **26 tools**: metadata, BSL, СКД, справка (`helpsearch`), формы (`search_forms`), usages/dossier/impact, `trace_call_chain`, `get_query_path`, `compare_objects`, `search_under`, `get_required_fields`, очереди reembed |
 
-**Граница v1:** upload или путь, видимый процессу; **нет** вызова платформы 1С для выгрузки, **нет** аутентификации MCP, **нет** слияния CF+CFE в один индекс.
+**Граница v1:** upload или путь, видимый процессу; **нет** аутентификации MCP, **нет** слияния CF+CFE в один индекс. Выгрузка конфигурации в файлы — подсистема §9.1 (native/portable).
 
 Рекомендуемый runtime — **Docker** с `MOUNT_POINTS` + volumes (см. §3.4). Native (venv) — запасной путь.
 
@@ -30,7 +30,7 @@
 │  Browser UI (index.html, i18n.js, ide-console.css, JSZip, Chart.js) │
 │  GET /  ·  /static/                                         │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI (app/main.py)  version 0.2.30                      │
+│  FastAPI (app/main.py)  version 0.2.32                      │
 │  /api/*  ·  /mcp/  (Streamable HTTP, FastMCP)               │
 ├──────────────┬──────────────────────┬───────────────────────┤
 │  SQLite      │  zvec (per entity)   │  LM Studio :1234      │
@@ -400,11 +400,30 @@ search_metadata | semantic_search   (context может быть tag:…; compac
 
 ---
 
-## 9. Вне текущего контура
+## 9. Выгрузка конфигурации в файлы (этапы 1–7)
+
+Подсистема выгрузки: профили и прогоны в SQLite (`dump_profiles`, `dump_runs`), REST `/api/dump/*`, autodetect платформы `GET /api/system/onec-platforms`, окно лаунчера и подменю трея «Выгрузить ▸».
+
+| Компонент | Роль |
+|---|---|
+| `app/services/onec_dump.py` | CLI Конфигуратора (`DumpConfigToFiles` / `-Extension`), preflight, кодировки — см. [dump-cli-spec](discussion/2026-09-13-dump-cli-spec.md) |
+| `app/services/dump_worker.py` | Фоновый воркер (**1 слот**), отдельно от `jobs.py`: dump — subprocess платформы, ingest — import-path в том же процессе |
+| `app/services/dump_ingest.py` | Пост-шаг после `state=ok`: import-path → `jobs.submit(parse_entity)`; identity-check (`dump_identity`) |
+| `app/portable/dump_window.py` | Окно «Выгрузка в файлы», poll REST |
+| `app/portable/launcher.py` | Kebab, трей, `_refresh_dump_tray_menu` |
+
+**Ограничения:** только **native/portable** (в Docker — 501); платформа **8.3.27+**; движок — **Конfigуратор** (не ibcmd); сессия **0** не поддержана; `-Extension` — одно расширение на профиль.
+
+**Безопасность:** `GET /api/system/onec-platforms` отдаёт список установленного софта и версий **без аутентификации** — осознанно для доверенной сети (решение 2a).
+
+**Пост-ingest:** при `entity_id` + `post_action` ∈ {`import`, `import+reindex`} после успешной выгрузки — refresh сущности из `out_dir` (без HTTP к себе); при `ingest_state=blocked` ingest не выполняется; при занятой сущности (`parsing`/`indexing`) — отложено.
+
+---
+
+## 10. Вне текущего контура
 
 | Функция | Почему не сейчас |
 |---|---|
-| Вызов **DESIGNER** / **ibcmd** для выгрузки | Нужны платформа 1С, строка ИБ, безопасный subprocess; в UI только каркас |
 | **`bsl_scope_members`** | Нужна внешняя база платформенных методов |
 | **Cross-encoder rerank** | zvec RRF уже даёт hybrid search |
 | **Chat-LLM** (`answer_metadata_question`) | Отдельный продуктовый контур |
@@ -418,7 +437,7 @@ search_metadata | semantic_search   (context может быть tag:…; compac
 
 ---
 
-## 10. Операционка
+## 11. Операционка
 
 ### 10.1. Каталоги данных (`./data`)
 

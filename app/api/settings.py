@@ -129,6 +129,8 @@ def patch_settings(body: SettingsPatch) -> SettingsOut:
         bsl_chunk_overlap=body.bsl_chunk_overlap,
         bsl_min_body_chars=body.bsl_min_body_chars,
         bsl_max_chunks=body.bsl_max_chunks,
+        onec_platform_path=body.onec_platform_path,
+        dump_default_out_root=body.dump_default_out_root,
     )
     return SettingsOut(**data)
 

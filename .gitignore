@@ -47,7 +47,13 @@ opencode.json
 .opencode/
 
 # Internal review journal and spec (local paths, not for a public clone)
-discussion/
+discussion/**
+!discussion/s6-artifacts/
+!discussion/s6-artifacts/**
+!discussion/s7-artifacts/
+!discussion/s7-artifacts/**
+!discussion/s5-artifacts/
+!discussion/s5-artifacts/ui-08-profile-modal-post-ru-dark.png
 discussion.md
 TZ.md
 compare.md

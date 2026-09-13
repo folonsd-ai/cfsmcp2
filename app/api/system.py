@@ -34,6 +34,17 @@ def get_runtime():
     return mounts_svc.runtime_snapshot()
 
 
+@router.get("/onec-platforms")
+def list_onec_platforms():
+    """Installed 1cv8.exe paths for settings UI «Определить…»."""
+    from app.services.onec_platform import detect_platforms
+
+    return [
+        {"path": str(p.path), "version": p.version, "bitness": p.bitness}
+        for p in detect_platforms()
+    ]
+
+
 class JobQueueReorderRequest(BaseModel):
     job_ids: list[str] = Field(..., description="Pending job ids in desired order")
 

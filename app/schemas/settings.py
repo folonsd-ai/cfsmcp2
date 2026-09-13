@@ -56,6 +56,8 @@ class SettingsOut(BaseModel):
     bsl_embed_limits_bounds: BslEmbedLimitsBounds | None = None
     bsl_embed_window_presets: list[BslEmbedWindowPreset] | None = None
     embed_model_window_presets: dict[str, str] | None = None
+    onec_platform_path: str = ""
+    dump_default_out_root: str = ""
 
 
 class SettingsPatch(BaseModel):
@@ -118,6 +120,12 @@ class SettingsPatch(BaseModel):
     )
     bsl_max_chunks: int | None = Field(
         default=None, description="Max chunk passages per method"
+    )
+    onec_platform_path: str | None = Field(
+        default=None, description="Path to 1cv8.exe for configurator dumps"
+    )
+    dump_default_out_root: str | None = Field(
+        default=None, description="Default output root for new dump profiles"
     )
 
 

@@ -16,6 +16,7 @@ from app.core.paths import default_data_dir, is_frozen, portable_exe_dir
 from app.portable.instance_lock import LauncherInstanceLock
 from app.portable.ui_theme import LauncherTheme
 from app.portable.network_util import find_free_port, is_port_available, is_valid_http_url, local_ip
+from app.portable.dump_window import DumpWindowController
 from app.portable.ui_tooltip import Tooltip
 from app.core.version import APP_VERSION
 from app.portable.ini import (
@@ -136,6 +137,7 @@ class PortableLauncher:
         self._last_crash_code: int | None = None
         self._status_extra_meta: str = ""
         self.theme = LauncherTheme
+        self.dump_ctrl = DumpWindowController(self)
 
         self.root = tk.Tk()
         self.root.title(f"cfsmcp2 — {self.instance_name}")
@@ -1086,6 +1088,8 @@ class PortableLauncher:
 
     def _build_kebab_menu(self) -> None:
         self._kebab_menu = self.theme.popup_menu(self.root)
+        self._kebab_menu.add_command(label="Выгрузка в файлы…", command=self.dump_ctrl.open_window)
+        self._kebab_menu.add_separator()
         self._kebab_menu.add_command(label="Проверить обновления", command=self.check_update)
         self._kebab_menu.add_command(label="Папка данных", command=self._open_data_dir)
         self._kebab_menu.add_command(label="Показать лог", command=self._open_server_log)
@@ -1543,6 +1547,73 @@ class PortableLauncher:
         else:
             delay = self._health_poll_ms
         self.root.after(delay, self._poll_server)
+        if self.dump_ctrl.should_poll():
+            self.dump_ctrl.poll_tick()
+
+    def _refresh_dump_tray_menu(self) -> None:
+        if self.tray_icon is None:
+            return
+        try:
+            import pystray
+
+            self.tray_icon.menu = self._build_tray_menu()
+            self.tray_icon.update_menu()
+        except Exception:
+            log.debug("tray menu refresh failed", exc_info=True)
+
+    def _build_tray_menu(self):
+        import pystray
+
+        def show_window(icon, _item) -> None:
+            self.root.after(0, self._show_window)
+
+        def tray_start(icon, _item) -> None:
+            self.root.after(0, self.start_server)
+
+        def tray_stop(icon, _item) -> None:
+            self.root.after(0, self.stop_server)
+
+        def tray_open(icon, _item) -> None:
+            self.root.after(0, self.open_ui)
+
+        def tray_dump_window(icon, _item) -> None:
+            self.root.after(0, self.dump_ctrl.open_window)
+
+        def tray_data(icon, _item) -> None:
+            self.root.after(0, self._open_data_dir)
+
+        def tray_log(icon, _item) -> None:
+            self.root.after(0, self._open_server_log)
+
+        def tray_exit(icon, _item) -> None:
+            self.root.after(0, self.exit_app)
+
+        items: list = [
+            pystray.MenuItem("Показать окно", show_window, default=True),
+            pystray.MenuItem("Открыть UI", tray_open),
+            pystray.Menu.SEPARATOR,
+        ]
+        quick = self.dump_ctrl.tray_submenu_items()
+        if quick:
+            dump_items = [
+                pystray.MenuItem(label, lambda _i, _it, fn=fn: self.root.after(0, fn))
+                for label, fn in quick
+            ]
+            items.append(pystray.MenuItem("Выгрузить", pystray.Menu(*dump_items)))
+        items.extend(
+            [
+                pystray.MenuItem("Выгрузка в файлы…", tray_dump_window),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Старт", tray_start),
+                pystray.MenuItem("Стоп", tray_stop),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Папка данных", tray_data),
+                pystray.MenuItem("Показать лог", tray_log),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Выход", tray_exit),
+            ]
+        )
+        return pystray.Menu(*items)
 
     def _on_health_result(self, ok: bool) -> None:
         self._health_inflight = False
@@ -1556,6 +1627,9 @@ class PortableLauncher:
                 self._schedule_uptime_tick()
                 self._update_action_buttons()
             self._set_status_band("running", "Запущен")
+            self.dump_ctrl.on_server_ready()
+            if self.dump_ctrl.should_poll():
+                self.dump_ctrl.poll_tick()
         else:
             if self._server_ready:
                 self._server_ready = False
@@ -1925,6 +1999,7 @@ class PortableLauncher:
         Tooltip.hide_all()
         self._close_crash_dialog()
         self._close_update_window()
+        self.dump_ctrl._close_window()
         if self._flash_after_id is not None:
             try:
                 self.root.after_cancel(self._flash_after_id)
@@ -2018,41 +2093,13 @@ class PortableLauncher:
         except ImportError:
             return
 
-        def show_window(icon, _item) -> None:
-            self.root.after(0, self._show_window)
-
-        def tray_start(icon, _item) -> None:
-            self.root.after(0, self.start_server)
-
-        def tray_stop(icon, _item) -> None:
-            self.root.after(0, self.stop_server)
-
-        def tray_open(icon, _item) -> None:
-            self.root.after(0, self.open_ui)
-
-        def tray_data(icon, _item) -> None:
-            self.root.after(0, self._open_data_dir)
-
-        def tray_log(icon, _item) -> None:
-            self.root.after(0, self._open_server_log)
-
-        def tray_exit(icon, _item) -> None:
-            self.root.after(0, self.exit_app)
-
-        menu = pystray.Menu(
-            pystray.MenuItem("Показать окно", show_window, default=True),
-            pystray.MenuItem("Открыть UI", tray_open),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Старт", tray_start),
-            pystray.MenuItem("Стоп", tray_stop),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Папка данных", tray_data),
-            pystray.MenuItem("Показать лог", tray_log),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Выход", tray_exit),
-        )
         self._tray_icon_current = None
-        self.tray_icon = pystray.Icon("cfsmcp2", self._tray_image(), self._tray_title(), menu)
+        self.tray_icon = pystray.Icon(
+            "cfsmcp2",
+            self._tray_image(),
+            self._tray_title(),
+            self._build_tray_menu(),
+        )
         self._tray_icon_current = self._tray_icon_state()
 
         def run_tray() -> None:
