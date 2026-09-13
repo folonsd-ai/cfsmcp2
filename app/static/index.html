@@ -20,7 +20,7 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <script src="/static/i18n.js?v=67"></script>
+  <script src="/static/i18n.js?v=68"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
@@ -2368,7 +2368,7 @@
             </div>
             <button type="button" class="btn secondary dump-extension-load-btn" id="dumpProfExtensionLoadBtn" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
-              <span data-i18n="dump.profile.extensionLoad">Из ИБ…</span>
+              <span id="dumpProfExtensionLoadLabel">Из ИБ…</span>
             </button>
             <label class="dump-field dump-field-grow" id="dumpExtensionField" hidden>
               <span class="dump-field-label" data-i18n="dump.profile.extensionName">Имя расширения</span>
@@ -2735,7 +2735,23 @@
 
   <script>
     const t = (key, params) => window.cfsmcp2I18n.t(key, params);
-    const applyI18n = () => window.cfsmcp2I18n.applyI18n();
+    function tUi(key, ruFallback, enFallback) {
+      const tr = t(key);
+      if (tr !== key) return tr;
+      return window.cfsmcp2I18n.getLang() === 'en' ? enFallback : ruFallback;
+    }
+    function syncDumpExtensionLoadLabel() {
+      const el = document.getElementById('dumpProfExtensionLoadLabel');
+      const btn = document.getElementById('dumpProfExtensionLoadBtn');
+      if (!el) return;
+      const label = tUi('dump.profile.extensionLoad', 'Из ИБ…', 'From IB…');
+      el.textContent = label;
+      if (btn) btn.title = label;
+    }
+    const applyI18n = () => {
+      window.cfsmcp2I18n.applyI18n();
+      syncDumpExtensionLoadLabel();
+    };
     applyI18n();
 
     const entityBoard = document.getElementById('entityBoard');
@@ -10578,7 +10594,9 @@
         }
         if (!res.ok) return showAlert(await res.text(), t('dialog.error'));
         const data = await res.json();
-        if (data.error) return showAlert(data.error, t('dump.profile.extensionLoadError'));
+        if (data.error) {
+          return showAlert(data.error, tUi('dump.profile.extensionLoadError', 'Не удалось получить список расширений', 'Could not load extension list'));
+        }
         const names = data.extensions || [];
         fillDumpExtensionNames(names);
         const input = document.getElementById('dumpProfExtension');
