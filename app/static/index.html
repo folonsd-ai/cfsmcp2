@@ -1417,7 +1417,7 @@
       margin: 6px 2px; background: transparent;
     }
   </style>
-  <link rel="stylesheet" href="/static/ide-console.css?v=43" />
+  <link rel="stylesheet" href="/static/ide-console.css?v=45" />
 </head>
 <body>
   <div class="topbar">
@@ -2644,6 +2644,12 @@
         </button>
       </div>
 
+      <div class="modal-tabs" role="tablist" aria-label="Source settings">
+        <button type="button" class="modal-tab active" role="tab" id="sourceTabMain" data-source-tab="main" aria-selected="true" data-i18n="source.tab.main">Источник</button>
+        <button type="button" class="modal-tab" role="tab" id="sourceTabExclude" data-source-tab="exclude" aria-selected="false" data-i18n="source.tab.exclude">Исключения</button>
+      </div>
+
+      <div class="modal-tab-panel" data-source-panel="main" role="tabpanel">
       <section class="source-section" id="sourceSectionEmbed">
         <h3 class="section-title" data-i18n="source.section.embed">Эмбеддинг</h3>
         <div class="source-embed-info" id="sourceEmbedInfo" aria-live="polite"></div>
@@ -2695,6 +2701,15 @@
         <p class="ingest-hint hint" data-i18n="source.reindexHint">Инкрементно переэмбедит BSL-методы (сигнатуры, текст meta_text); метаданные и формы не трогаются.</p>
         <button id="sourceReindexBtn" class="btn secondary" type="button" data-i18n="source.reindex">Пересобрать индекс</button>
       </section>
+      </div>
+
+      <div class="modal-tab-panel" data-source-panel="exclude" role="tabpanel" hidden>
+        <section class="source-section source-exclude-section">
+          <h3 class="section-title" data-i18n="source.section.exclude">Исключения по имени</h3>
+          <p class="ingest-hint hint" data-i18n="source.excludeHint">Подстроки через запятую или с новой строки. Совпадение в имени объекта — он не попадёт в индекс. При сохранении изменений конфигурация переразбирается.</p>
+          <textarea id="sourceExcludeField" class="ingest-exclude" rows="8" autocomplete="off" spellcheck="false" data-i18n-placeholder="ingest.excludePh" placeholder=""></textarea>
+        </section>
+      </div>
 
       <div class="modal-actions">
         <button class="btn secondary" id="cancelSourceModal" type="button" data-i18n="dialog.cancel">Отмена</button>
@@ -2846,6 +2861,24 @@
 
     function formatExcludeText(list) {
       return (list || []).join('\n');
+    }
+
+    function excludeListsEqual(a, b) {
+      const norm = (list) => parseExcludeText(formatExcludeText(list)).map((s) => s.toLowerCase()).sort().join('\0');
+      return norm(a) === norm(b);
+    }
+
+    function setSourceTab(name) {
+      const modal = document.getElementById('sourceModal');
+      if (!modal) return;
+      modal.querySelectorAll('[data-source-tab]').forEach((btn) => {
+        const on = btn.getAttribute('data-source-tab') === name;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      modal.querySelectorAll('[data-source-panel]').forEach((panel) => {
+        panel.hidden = panel.getAttribute('data-source-panel') !== name;
+      });
     }
 
     function shortenPath(p, maxLen) {
@@ -4177,6 +4210,7 @@
       await loadRuntimeInfo();
       await ensureEmbedInfoContext();
       sourceModalEntityId = id;
+      setSourceTab('main');
       sourcePeekGen += 1;
       sourceVersionAuto = String(e.version || '').trim();
       sourceCommentStamp = '';
@@ -4186,6 +4220,12 @@
       const comment = String(e.comment || '');
       if (commentInp) commentInp.value = comment;
       sourceCommentAuto = comment.trim();
+      const profile = e.ingest_profile || DEFAULT_INGEST_PROFILE;
+      const excludeField = document.getElementById('sourceExcludeField');
+      if (excludeField) {
+        excludeField.value = formatExcludeText(profile.exclude_name_substrings);
+        excludeField.disabled = busy.has(e.status);
+      }
       syncSourceModalForEntity(e);
       renderSourceEmbedInfo(e);
       renderSourceDumpTrace(e.id);
@@ -4208,6 +4248,7 @@
       sourceCommentAuto = '';
       sourceCommentStamp = '';
       sourceVersionAuto = '';
+      setSourceTab('main');
       document.getElementById('sourceModal').classList.remove('open');
       document.getElementById('sourceModal').setAttribute('aria-hidden', 'true');
     }
@@ -4223,10 +4264,14 @@
         ? String(document.getElementById('sourceCommentField').value)
         : '';
       const prevComment = String(e.comment || '');
+      const profile = e.ingest_profile || DEFAULT_INGEST_PROFILE;
+      const prevExclude = profile.exclude_name_substrings || DEFAULT_INGEST_PROFILE.exclude_name_substrings || [];
+      const nextExclude = parseExcludeText(document.getElementById('sourceExcludeField')?.value);
       const pathChanged = nextPath !== prevPath;
       const commentChanged = nextComment !== prevComment;
-      if (!pathChanged && !commentChanged) return { saved: false, error: null, unchanged: true };
-      if (busy.has(e.status) && pathChanged) {
+      const excludeChanged = !excludeListsEqual(nextExclude, prevExclude);
+      if (!pathChanged && !commentChanged && !excludeChanged) return { saved: false, error: null, unchanged: true };
+      if (busy.has(e.status) && (pathChanged || excludeChanged)) {
         return { saved: false, error: t('dnd.busyRow') };
       }
       if (pathChanged && nextPath && !isAbsoluteLocalPath(nextPath)) {
@@ -4235,6 +4280,7 @@
       const body = {};
       if (pathChanged) body.source_path = nextPath;
       if (commentChanged) body.comment = nextComment;
+      if (excludeChanged) body.exclude_name_substrings = nextExclude;
       try {
         const res = await fetch('/api/entities/' + id, {
           method: 'PATCH',
@@ -4258,8 +4304,9 @@
           if (updated.comment != null) cached.comment = updated.comment || '';
           if (updated.source_path != null) cached.source_path = updated.source_path || '';
           if (updated.file_path != null) cached.file_path = updated.file_path || '';
+          if (updated.ingest_profile) cached.ingest_profile = updated.ingest_profile;
         }
-        return { saved: true, error: null };
+        return { saved: true, error: null, reparse: excludeChanged };
       } catch (err) {
         return { saved: false, error: String(err && err.message ? err.message : err) };
       }
@@ -4290,6 +4337,9 @@
         onSourcePathSelected(path);
       }
     };
+    document.getElementById('sourceModal')?.querySelectorAll('[data-source-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => setSourceTab(btn.getAttribute('data-source-tab')));
+    });
     document.getElementById('closeSourceModal').onclick = closeSourceModal;
     document.getElementById('cancelSourceModal').onclick = closeSourceModal;
     document.getElementById('saveSourceModal').onclick = () => { void saveSourceModalPath(); };
@@ -9518,6 +9568,7 @@
     let dumpEditingId = null;
     let dumpExtensionNames = [];
     let dumpExtensionSuggestOpen = false;
+    let dumpOutDirAuto = '';
     const DUMP_PWD_MASK = '••••••••';
     let dumpPasswordMode = 'empty'; // empty | stored | editing | cleared
     let dumpPlatformOverrideOpen = false;
@@ -9617,9 +9668,14 @@
     }
 
     function dumpTargetLabel(p) {
+      const dumpName = (p.dump_config_name || '').trim();
+      const dumpVer = (p.dump_config_version || '').trim();
+      const verSuffix = dumpVer ? `, ${dumpVer}` : '';
       if ((p.target_type || '') === 'extension') {
-        return t('dump.target.extension', { name: p.extension_name || '?' });
+        const name = (p.extension_name || dumpName || '?').trim();
+        return t('dump.target.extension', { name }) + verSuffix;
       }
+      if (dumpName) return dumpName + verSuffix;
       return t('dump.target.configuration');
     }
 
@@ -10239,6 +10295,34 @@
       if (radio) radio.checked = true;
       syncDumpSegButtons(name);
       syncDumpProfileFormUi();
+      if (name === 'dumpTargetType') refreshDumpExtensionOutDir({ force: value === 'extension' });
+    }
+
+    function joinDumpOutPath(root, name) {
+      const r = String(root || '').trim().replace(/[/\\]+$/, '');
+      const s = String(name || '').trim().replace(/^[/\\]+/, '');
+      if (!r) return s;
+      if (!s) return r;
+      const sep = (/^[A-Za-z]:[\\/]/.test(r) || r.includes('\\')) && !r.includes('/') ? '\\' : '/';
+      return r + sep + s;
+    }
+
+    function refreshDumpExtensionOutDir({ force } = {}) {
+      if (dumpEditingId != null) return;
+      const ext = (document.querySelector('input[name="dumpTargetType"]:checked')?.value || '') === 'extension';
+      if (!ext) return;
+      const extName = (document.getElementById('dumpProfExtension')?.value || '').trim();
+      if (!extName) return;
+      const root = (settings.dump_default_out_root || '').trim();
+      if (!root) return;
+      const next = joinDumpOutPath(root, extName);
+      const outInp = document.getElementById('dumpProfOutDir');
+      if (!outInp) return;
+      const cur = outInp.value.trim();
+      if (force || !cur || cur === dumpOutDirAuto) {
+        outInp.value = next;
+        dumpOutDirAuto = next;
+      }
     }
 
     function syncDumpPasswordUi() {
@@ -10334,6 +10418,7 @@
         extLoadBtn.disabled = false;
       }
       if (!ext) hideDumpExtensionSuggest();
+      else refreshDumpExtensionOutDir();
       const ibFile = (document.querySelector('input[name="dumpIbType"]:checked')?.value || 'file') === 'file';
       const ibFileField = document.getElementById('dumpIbFileField');
       if (ibFileField) ibFileField.hidden = !ibFile;
@@ -10408,6 +10493,7 @@
       dumpEditingId = id == null ? null : Number(id);
       dumpHasStoredPassword = false;
       dumpPlatformOverrideOpen = false;
+      dumpOutDirAuto = '';
       fillDumpExtensionNames([]);
       const deleteBtn = document.getElementById('dumpProfDeleteBtn');
       const deleteSep = document.getElementById('dumpProfDeleteSep');
@@ -10602,6 +10688,7 @@
         const input = document.getElementById('dumpProfExtension');
         if (input && names.length === 1) input.value = names[0];
         else if (input && names.length && !input.value.trim()) input.value = names[0];
+        refreshDumpExtensionOutDir({ force: true });
         if (names.length > 1) renderDumpExtensionSuggest(true);
       } catch (err) {
         showAlert(String(err.message || err), t('dialog.error'));
@@ -10627,6 +10714,22 @@
       renderPreflightBox(await res.json());
     }
 
+    async function showDumpProfileSaveError(res) {
+      if (res.status === 409) {
+        try {
+          const j = await res.json();
+          const key = j.detail?.message_key || j.detail;
+          if (key === 'dump.profile.outDirTaken') {
+            return showAlert(t('dump.profile.outDirTaken'), t('dump.profile.saveError'));
+          }
+          if (key === 'dump.profile.entityTaken') {
+            return showAlert(t('dump.profile.entityTaken'), t('dump.profile.saveError'));
+          }
+        } catch (_) { /* fall through */ }
+      }
+      return showAlert(await res.text(), t('dump.profile.saveError'));
+    }
+
     async function saveDumpProfile() {
       const payload = collectDumpProfilePayload();
       if (!payload.name) return showAlert(t('dump.profile.name'), t('dialog.error'));
@@ -10637,7 +10740,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) return showAlert(await res.text(), t('dump.profile.saveError'));
+      if (!res.ok) return showDumpProfileSaveError(res);
       closeDumpProfileModal();
       await loadDumpBoard();
     }
@@ -10742,6 +10845,7 @@
       if (dumpExtensionNames.length) renderDumpExtensionSuggest(true);
     });
     document.getElementById('dumpProfExtension')?.addEventListener('input', () => {
+      refreshDumpExtensionOutDir({ force: true });
       if (dumpExtensionNames.length) renderDumpExtensionSuggest(true);
     });
     document.getElementById('dumpProfExtension')?.addEventListener('blur', () => {
@@ -10754,6 +10858,7 @@
       const input = document.getElementById('dumpProfExtension');
       if (input) input.value = item.textContent || '';
       hideDumpExtensionSuggest();
+      refreshDumpExtensionOutDir({ force: true });
     });
     document.getElementById('dumpProfDeleteBtn')?.addEventListener('click', () => void deleteDumpProfile());
     document.getElementById('dumpProfPassword')?.addEventListener('focus', onDumpPasswordFocus);
@@ -10933,7 +11038,11 @@
     });
     document.getElementById('dumpProfClearBeforeFull')?.addEventListener('change', syncDumpProfileFormUi);
     document.getElementById('dumpProfClearBeforeFull')?.addEventListener('change', syncDumpProfileFormUi);
-    document.getElementById('dumpProfOutDir')?.addEventListener('input', syncDumpProfileFormUi);
+    document.getElementById('dumpProfOutDir')?.addEventListener('input', () => {
+      const v = (document.getElementById('dumpProfOutDir')?.value || '').trim();
+      if (v !== dumpOutDirAuto) dumpOutDirAuto = '';
+      syncDumpProfileFormUi();
+    });
     document.getElementById('saveOnecPlatformBtn')?.addEventListener('click', () => void saveOnecPlatformSettings());
     document.getElementById('onecPlatformDetectBtn')?.addEventListener('click', () => void detectOnecPlatform());
     document.getElementById('onecPlatformPath')?.addEventListener('change', () => void refreshOnecPlatformVersionLabel());

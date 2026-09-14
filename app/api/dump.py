@@ -90,6 +90,21 @@ def _list_extensions_response(spec: DumpProfileSpec) -> DumpExtensionsOut:
     return DumpExtensionsOut(extensions=extensions, error=error)
 
 
+def _raise_profile_value_error(exc: ValueError) -> None:
+    code = str(exc)
+    if code == "out_dir_taken":
+        raise HTTPException(
+            409,
+            detail={"message_key": "dump.profile.outDirTaken"},
+        ) from exc
+    if code == "entity_id_taken":
+        raise HTTPException(
+            409,
+            detail={"message_key": "dump.profile.entityTaken"},
+        ) from exc
+    raise HTTPException(400, str(exc)) from exc
+
+
 @router.get("/profiles", response_model=list[DumpProfileOut])
 def list_profiles() -> list[DumpProfileOut]:
     conn = connect(settings.db_path)
@@ -104,7 +119,10 @@ def create_profile(body: DumpProfileCreate) -> DumpProfileOut:
     _require_native_dump()
     conn = connect(settings.db_path)
     try:
-        row = dump_store.create_profile(conn, body.model_dump())
+        try:
+            row = dump_store.create_profile(conn, body.model_dump())
+        except ValueError as exc:
+            _raise_profile_value_error(exc)
         return DumpProfileOut(**row)
     finally:
         conn.close()
@@ -128,7 +146,10 @@ def patch_profile(profile_id: int, body: DumpProfilePatch) -> DumpProfileOut:
     conn = connect(settings.db_path)
     try:
         data = body.model_dump(exclude_unset=True)
-        row = dump_store.update_profile(conn, profile_id, data)
+        try:
+            row = dump_store.update_profile(conn, profile_id, data)
+        except ValueError as exc:
+            _raise_profile_value_error(exc)
         if not row:
             raise HTTPException(404, "profile not found")
         return DumpProfileOut(**row)
@@ -349,11 +370,14 @@ def create_context_from_dump(profile_id: int, body: DumpCreateContextIn) -> Dump
             comment=body.comment,
             ingest_profile_json=body.ingest_profile,
         )
-        updated = dump_store.update_profile(
-            conn,
-            profile_id,
-            {"entity_id": entity_id, "post_action": "import"},
-        )
+        try:
+            updated = dump_store.update_profile(
+                conn,
+                profile_id,
+                {"entity_id": entity_id, "post_action": "import"},
+            )
+        except ValueError as exc:
+            _raise_profile_value_error(exc)
         conn.commit()
         jobs.submit(parse_entity, entity_id)
         assert updated is not None

@@ -10,10 +10,31 @@ from app.services.onec_dump import DumpProfileSpec
 from app.services.secret_store import decrypt_secret, encrypt_secret
 
 
+def peek_dump_out_meta(out_dir: str) -> tuple[str, str]:
+    """Имя и версия из Configuration.xml в каталоге выгрузки (если уже есть дамп)."""
+    raw = (out_dir or "").strip()
+    if not raw:
+        return "", ""
+    try:
+        from app.services.dump_parser import read_configuration_meta
+        from app.services.dump_zip import resolve_dump_root
+
+        root = resolve_dump_root(Path(raw))
+        if not (root / "Configuration.xml").is_file():
+            return "", ""
+        meta = read_configuration_meta(root)
+        return (meta.config_name or "").strip(), (meta.version or "").strip()
+    except OSError:
+        return "", ""
+
+
 def _row_to_profile(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["has_password"] = bool(d.get("secret_blob"))
     d.pop("secret_blob", None)
+    dump_name, dump_version = peek_dump_out_meta(d.get("out_dir") or "")
+    d["dump_config_name"] = dump_name
+    d["dump_config_version"] = dump_version
     return d
 
 
@@ -40,7 +61,47 @@ def get_profile_row(conn: sqlite3.Connection, profile_id: int) -> sqlite3.Row | 
     return conn.execute("SELECT * FROM dump_profiles WHERE id=?", (profile_id,)).fetchone()
 
 
+def _norm_out_dir(path: str) -> str:
+    raw = (path or "").strip()
+    if not raw:
+        return ""
+    try:
+        return str(Path(raw).resolve()).casefold()
+    except OSError:
+        return raw.casefold().replace("\\", "/")
+
+
+def assert_profile_constraints(
+    conn: sqlite3.Connection,
+    *,
+    out_dir: str,
+    entity_id: int | None,
+    exclude_profile_id: int | None = None,
+) -> None:
+    norm = _norm_out_dir(out_dir)
+    if norm:
+        rows = conn.execute(
+            "SELECT id, out_dir FROM dump_profiles WHERE trim(coalesce(out_dir, '')) != ''"
+        ).fetchall()
+        for row in rows:
+            if exclude_profile_id is not None and int(row["id"]) == int(exclude_profile_id):
+                continue
+            if _norm_out_dir(str(row["out_dir"] or "")) == norm:
+                raise ValueError("out_dir_taken")
+    if entity_id is not None:
+        q = "SELECT id FROM dump_profiles WHERE entity_id=?"
+        params: list[Any] = [entity_id]
+        if exclude_profile_id is not None:
+            q += " AND id != ?"
+            params.append(exclude_profile_id)
+        if conn.execute(q, params).fetchone():
+            raise ValueError("entity_id_taken")
+
+
 def create_profile(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
+    out_dir = data.get("out_dir") or ""
+    entity_id = data.get("entity_id")
+    assert_profile_constraints(conn, out_dir=out_dir, entity_id=entity_id)
     secret_blob = None
     if data.get("password"):
         secret_blob = encrypt_secret(str(data["password"]))
@@ -108,6 +169,12 @@ def update_profile(
             secret_blob = None
         else:
             secret_blob = encrypt_secret(str(pwd))
+    assert_profile_constraints(
+        conn,
+        out_dir=str(fields["out_dir"] or ""),
+        entity_id=fields["entity_id"],
+        exclude_profile_id=profile_id,
+    )
     conn.execute(
         """
         UPDATE dump_profiles SET
@@ -161,7 +228,10 @@ def suggest_copy_profile_name(
 def copy_profile(
     conn: sqlite3.Connection, profile_id: int, *, name: str | None = None
 ) -> dict[str, Any] | None:
-    """Duplicate dump profile settings, including encrypted password blob."""
+    """Duplicate dump profile settings, including encrypted password blob.
+
+    Extension name, out_dir and post-import fields (post_action, entity_id) are reset.
+    """
     row = get_profile_row(conn, profile_id)
     if not row:
         return None
@@ -178,17 +248,17 @@ def copy_profile(
             new_name,
             row["comment"],
             row["target_type"],
-            row["extension_name"],
+            "",
             row["ib_type"],
             row["ib_address"],
             row["ib_user"],
             row["secret_blob"],
             row["platform_path_override"],
-            row["out_dir"],
+            "",
             row["dump_mode"],
             row["clear_before_full"],
-            row["post_action"],
-            row["entity_id"],
+            "",
+            None,
             int(row["timeout_sec"] or 7200),
         ),
     )

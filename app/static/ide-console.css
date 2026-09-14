@@ -3262,8 +3262,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .dump-profiles-table { table-layout: fixed; }
 .dump-profiles-table .c-check { width: 36px; }
 .dump-profiles-table .c-profile { width: 14%; }
-.dump-profiles-table .c-target { width: 12%; }
-.dump-profiles-table .c-out { width: 34%; }
+.dump-profiles-table .c-target { width: 18%; }
+.dump-profiles-table .c-out { width: 28%; }
 .dump-profiles-table .c-ctx { width: 16%; }
 .dump-profiles-table .c-last { width: 18%; }
 .dump-profiles-table .c-actions { width: 120px; min-width: 120px; }
@@ -3362,20 +3362,56 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   overflow: auto;
   padding-right: 4px;
 }
-.dump-profile-section { padding-top: 8px; border-top: 1px solid var(--color-border-soft); }
+.dump-profile-section { padding-top: 10px; border-top: 1px solid var(--color-border-soft); }
 .dump-profile-section-last { padding-bottom: 2px; }
-.dump-section-title { font: 700 12.5px var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--color-muted-foreground); margin: 0 0 6px; }
-.dump-profile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
+.dump-profile-modal .dump-section-title {
+  font: 700 14px var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--color-muted-foreground);
+  margin: 0 0 8px;
+}
+.dump-profile-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
 .dump-field-row-2 { margin-bottom: 0; }
-.dump-field { display: flex; flex-direction: column; gap: 5px; margin: 0; min-width: 0; }
-.dump-field-label { font: 600 12px var(--font-sans); color: var(--color-muted-foreground); letter-spacing: .01em; }
+.dump-field { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0; }
+.dump-profile-modal .dump-field-label {
+  font: 600 13.5px var(--font-sans);
+  color: var(--color-muted-foreground);
+  letter-spacing: .01em;
+}
 .dump-field-grow { flex: 1 1 180px; min-width: 0; }
-.dump-field input, .dump-field select { width: 100%; box-sizing: border-box; }
-.dump-field-timeout { flex: 0 0 auto; width: 96px; min-width: 96px; }
-.dump-field-timeout input { width: 100%; text-align: center; font: 600 15px var(--font-mono); }
-.dump-inline-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; margin-bottom: 6px; }
+.dump-profile-modal .dump-field input,
+.dump-profile-modal .dump-field select,
+.dump-profile-modal .dump-profile-row input,
+.dump-profile-modal .dump-profile-row select,
+.dump-profile-modal .dump-field-row-inline input,
+.dump-profile-modal .dump-password-wrap input,
+.dump-profile-modal .dump-extension-input-wrap input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--color-background);
+  border: 1px solid var(--color-border-soft);
+  color: var(--color-foreground);
+  border-radius: 9px;
+  padding: 11px 12px;
+  font: 15.5px var(--font-sans);
+  min-height: 42px;
+}
+.dump-profile-modal .dump-field input:focus-visible,
+.dump-profile-modal .dump-field select:focus-visible,
+.dump-profile-modal .dump-profile-row input:focus-visible,
+.dump-profile-modal .dump-field-row-inline input:focus-visible,
+.dump-profile-modal .dump-password-wrap input:focus-visible,
+.dump-profile-modal .dump-extension-input-wrap input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.dump-field-timeout { flex: 0 0 auto; width: 104px; min-width: 104px; }
+.dump-field-timeout input { width: 100%; text-align: center; font: 600 15.5px var(--font-mono); }
+.dump-inline-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; margin-bottom: 8px; }
 .dump-seg-row { flex: 0 0 auto; margin: 0; }
-.dump-seg-row .adv-preset-btn { padding: 7px 12px; font-size: 13px; white-space: nowrap; }
+.dump-profile-modal .dump-seg-row .adv-preset-btn { padding: 8px 14px; font-size: 14px; white-space: nowrap; }
 .dump-mode-row { align-items: flex-end; }
 .dump-post-row { align-items: center; }
 .dump-field-inline {
@@ -3402,7 +3438,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .dump-radio-sr { position: absolute; width: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
 .dump-ib-panel[hidden] { display: none !important; }
 #dumpProfileModal [hidden] { display: none !important; }
-.dump-platform-compact { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font: 14px/1.4 var(--font-sans); color: var(--color-foreground); margin-bottom: 0; }
+.dump-platform-compact { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font: 15px/1.45 var(--font-sans); color: var(--color-foreground); margin-bottom: 0; }
 .dump-platform-sep { color: var(--color-muted-foreground); opacity: .55; }
 .dump-link-btn { appearance: none; border: none; background: none; padding: 0; font: inherit; color: var(--color-accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .dump-link-btn:hover { color: var(--color-foreground); }
@@ -3415,11 +3451,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   background: transparent; color: var(--color-muted-foreground); font-size: 18px; line-height: 1; cursor: pointer;
 }
 .dump-password-clear:hover { background: var(--color-muted); color: var(--color-foreground); }
-.dump-password-saved-tag { font: 500 11px var(--font-sans); color: var(--color-accent); text-transform: lowercase; letter-spacing: normal; }
+.dump-password-saved-tag { font: 500 12.5px var(--font-sans); color: var(--color-accent); text-transform: lowercase; letter-spacing: normal; }
+.dump-profile-modal .hint { font-size: 14.5px; line-height: 1.45; }
 .dump-profile-modal label.check-row,
 .dump-profile-section label.check-row {
   display: flex; flex-direction: row; align-items: center; gap: 8px;
-  cursor: pointer; font-size: 13.5px; color: var(--color-foreground); margin: 4px 0 0;
+  cursor: pointer; font-size: 14.5px; color: var(--color-foreground); margin: 4px 0 0;
 }
 .dump-profile-modal label.check-row input,
 .dump-profile-section label.check-row input {
@@ -3433,7 +3470,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .dump-extension-load-btn {
   display: inline-flex; align-items: center; gap: 6px;
   flex: 0 0 auto; white-space: nowrap; align-self: flex-end;
-  height: 36px; padding: 0 12px;
+  height: 42px; padding: 0 14px;
+  font-size: 14.5px;
 }
 .dump-extension-load-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
 #dumpProfExtensionLoadBtn[hidden] { display: none !important; }
@@ -3450,9 +3488,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .dump-extension-suggest[hidden] { display: none !important; }
 .dump-extension-suggest-item {
   display: block; width: 100%; box-sizing: border-box;
-  padding: 7px 10px; border: none; border-radius: 6px;
+  padding: 8px 10px; border: none; border-radius: 6px;
   background: transparent; color: var(--color-foreground);
-  font: 13.5px/1.35 var(--font-sans); text-align: left; cursor: pointer;
+  font: 15px/1.35 var(--font-sans); text-align: left; cursor: pointer;
 }
 .dump-extension-suggest-item:hover,
 .dump-extension-suggest-item:focus-visible {

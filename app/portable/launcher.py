@@ -2162,32 +2162,21 @@ def _show_fatal_error(text: str) -> None:
         pass
 
 
-def _server_log_stream():
-    """Attach stdout/stderr for windowed exe; avoid opening server.log twice."""
-    stream = sys.stderr if sys.stderr is not None else sys.stdout
-    if stream is not None:
-        return stream
-    for fd in (1, 2):
-        try:
-            return os.fdopen(fd, "a", closefd=False)
-        except OSError:
-            continue
-    log_path = portable_exe_dir() / "data" / "server.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    return open(log_path, "a", encoding="utf-8")
+def _null_stream():
+    """Windowed exe has no console; avoid writing raw stdout to server.log."""
+    try:
+        return open(os.devnull, "w", encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _ensure_stdio() -> None:
-    """Windowed PyInstaller exe has no console; uvicorn logging requires stdout/stderr."""
-    stream = _server_log_stream()
-    sys.stdout = stream
-    sys.stderr = stream
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        handlers=[logging.StreamHandler(stream)],
-        force=True,
-    )
+    """Windowed PyInstaller exe has no console; logging goes via app.core.logging_setup."""
+    stream = _null_stream()
+    if sys.stdout is None and stream is not None:
+        sys.stdout = stream
+    if sys.stderr is None and stream is not None:
+        sys.stderr = stream
 
 
 def _parse_apply_update_args() -> tuple[Path, Path, int]:

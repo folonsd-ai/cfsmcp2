@@ -58,6 +58,30 @@ def ingest_profile_of(entity: dict) -> dict:
         return {}
 
 
+def normalize_exclude_name_substrings(raw: list[str] | None) -> list[str]:
+    return [str(s).strip() for s in (raw or []) if str(s).strip()]
+
+
+def exclude_name_substrings_key(items: list[str] | None) -> tuple[str, ...]:
+    return tuple(sorted(str(s).strip().lower() for s in (items or []) if str(s).strip()))
+
+
+def set_ingest_profile_excludes(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    exclude_name_substrings: list[str],
+) -> None:
+    row = get_entity(conn, entity_id)
+    if not row:
+        raise KeyError(entity_id)
+    profile = ingest_profile_of(dict(row))
+    profile["exclude_name_substrings"] = normalize_exclude_name_substrings(exclude_name_substrings)
+    conn.execute(
+        "UPDATE entities SET ingest_profile=?, updated_at=datetime('now') WHERE id=?",
+        (json.dumps(profile, ensure_ascii=False), entity_id),
+    )
+
+
 def upsert_entity(
     conn: sqlite3.Connection,
     *,

@@ -22,6 +22,8 @@ class DumpProfileOut(BaseModel):
     timeout_sec: int = 7200
     last_run_state: str = ""
     last_run_at: str = ""
+    dump_config_name: str = ""
+    dump_config_version: str = ""
     created_at: str = ""
     updated_at: str = ""
 

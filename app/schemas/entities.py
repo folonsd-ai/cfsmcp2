@@ -271,6 +271,7 @@ class EntityPatch(BaseModel):
     name: str | None = None
     # Только путь (без ingest). Path-режим: также file_path/dumps_dir; upload — bookmark source_path.
     source_path: str | None = None
+    exclude_name_substrings: list[str] | None = None
 
 
 class ImportPathRequest(BaseModel):

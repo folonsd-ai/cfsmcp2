@@ -19,6 +19,7 @@ from app.api import system as system_api
 from app.api import tags as tags_api
 from app.core.config import settings
 from app.core.database import connect, init_db
+from app.core.logging_setup import configure_logging
 from app.core.paths import resolve_static_dir
 from app.core.version import APP_VERSION
 from app.mcp.server import mcp
@@ -28,7 +29,7 @@ from app.services.mounts import effective_runtime_mode
 from app.services.pipeline import backfill_entity_types, cleanup_metadata_orphans, recover_interrupted_indexing
 from app.services.usage_stats import is_important_api, is_ui_poll_api, usage_stats
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+configure_logging()
 log = logging.getLogger("cfsmcp2")
 
 mcp_app = mcp.http_app(path="/", transport="streamable-http")

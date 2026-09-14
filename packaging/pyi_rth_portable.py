@@ -24,21 +24,11 @@ def _write_crash(text: str) -> None:
         pass
 
 
-def _server_log_stream():
+def _null_stream():
     import os
 
-    stream = sys.stderr if sys.stderr is not None else sys.stdout
-    if stream is not None:
-        return stream
-    for fd in (1, 2):
-        try:
-            return os.fdopen(fd, "a", closefd=False)
-        except OSError:
-            continue
-    log_path = _crash_log_path().parent / "server.log"
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        return open(log_path, "a", encoding="utf-8")
+        return open(os.devnull, "w", encoding="utf-8")
     except OSError:
         return None
 
@@ -48,7 +38,7 @@ def _ensure_stdio() -> None:
         return
     if sys.stdout is not None and sys.stderr is not None:
         return
-    stream = _server_log_stream()
+    stream = _null_stream()
     if stream is None:
         return
     if sys.stdout is None:

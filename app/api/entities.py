@@ -800,6 +800,7 @@ def copy_entity(entity_id: int, body: EntityCopy) -> StreamingResponse:
 
 @router.patch("/{entity_id}")
 def patch_entity(entity_id: int, body: EntityPatch) -> EntityOut:
+    needs_reparse = False
     conn = connect(settings.db_path)
     try:
         row = ent_repo.get_entity(conn, entity_id)
@@ -876,6 +877,19 @@ def patch_entity(entity_id: int, body: EntityPatch) -> EntityOut:
                 msg = str(exc)
                 code = 409 if "busy" in msg.lower() or "already used" in msg.lower() else 400
                 raise HTTPException(code, msg) from exc
+        if body.exclude_name_substrings is not None:
+            if row["status"] in ("parsing", "indexing", "uploaded", "loading_modules"):
+                raise HTTPException(409, "Entity is busy; cannot change exclude list")
+            profile = ent_repo.ingest_profile_of(row)
+            cur_key = ent_repo.exclude_name_substrings_key(profile.get("exclude_name_substrings"))
+            new_clean = ent_repo.normalize_exclude_name_substrings(body.exclude_name_substrings)
+            new_key = ent_repo.exclude_name_substrings_key(new_clean)
+            if cur_key != new_key:
+                ent_repo.set_ingest_profile_excludes(conn, entity_id, new_clean)
+                ent_repo.set_status(
+                    conn, entity_id, "uploaded", indexed_count=0, index_target=0
+                )
+                needs_reparse = True
         if body.source_path is not None:
             # Без ingest: смена пути / точки подключения. Path → file_path/dumps_dir;
             # upload → только закладка source_path.
@@ -908,6 +922,12 @@ def patch_entity(entity_id: int, body: EntityPatch) -> EntityOut:
                         conn, entity_id, source_path=resolved_s
                     )
         conn.commit()
+    finally:
+        conn.close()
+    if needs_reparse:
+        jobs.submit(parse_entity, entity_id)
+    conn = connect(settings.db_path)
+    try:
         row = ent_repo.get_entity(conn, entity_id)
         from app.repositories import tags as tag_repo
 
