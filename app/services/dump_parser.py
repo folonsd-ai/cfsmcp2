@@ -4,8 +4,9 @@
   entity_type (configuration|extension по ``ConfigurationExtensionPurpose`` /
   ``ObjectBelonging=Adopted|Borrowed``, как в report-детекте; тег
   ``ConfigurationExtensionCompatibilityMode`` НЕ признак CFE — он есть и у CF).
-- Объектный XML (``Catalogs/Х.xml``, …): корень ``MetaDataObject`` → узел
-  (kind RU plural из имени каталога-контейнера, EN через ``KIND_RU_TO_EN``),
+- Объектный XML (``Catalogs/Х.xml``, …): корень ``MetaDataObject`` → **прямой**
+  дочерний узел kind (не любой вложенный ``SettingsStorage`` / ``ChartOfAccounts`` /
+  ``Task`` в Properties — иначе пустой yield и вечный skip по stamp),
   путь RU (``Справочники.Х``), props = ПОЛНОЕ снятие ``<Properties>``
   (значения строк; типы с квалификаторами ``v8:StringQualifiers`` и пр.;
   составные типы — списком).
@@ -434,13 +435,20 @@ class DumpScanner:
     def _parse_object_file(
         self, xml_path: Path, ru_plural: str, container_en: str
     ) -> Iterator[tuple[dict[str, Any], list[tuple[str, str, str]]]]:
+        # Only the direct child of MetaDataObject is the object root. Matching any
+        # nested tag in _OBJECT_ELEMENT_TAGS (e.g. Report/Properties/SettingsStorage,
+        # AccountingRegister/Properties/ChartOfAccounts) breaks early with a stub
+        # element that has no Name → silent empty yield and permanent stamp skip.
         obj_elem = None
         try:
-            for event, elem in ET.iterparse(str(xml_path), events=("end",)):
-                tag = _local(elem.tag)
-                if tag in _OBJECT_ELEMENT_TAGS:
-                    obj_elem = elem
-                    break
+            for _event, elem in ET.iterparse(str(xml_path), events=("end",)):
+                if _local(elem.tag) != "MetaDataObject":
+                    continue
+                for child in elem:
+                    if _local(child.tag) in _OBJECT_ELEMENT_TAGS:
+                        obj_elem = child
+                        break
+                break
         except ET.ParseError as exc:
             self.audit.append(AuditEntry(str(xml_path), "parse_error", str(exc)[:120]))
             return

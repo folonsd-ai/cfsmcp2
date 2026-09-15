@@ -7,10 +7,11 @@ Zip-upload сносит каталог — все mtime новые, skip не с
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from app.services.path_nfc import nfc_rel
+from app.services.path_nfc import nfc, nfc_rel
 
 REPORT_FILE_REL = "__report__.txt"
 
@@ -45,6 +46,62 @@ def tracked_files_unchanged(dumps_dir: Path, prev: dict[str, tuple[int, int]]) -
         if cur != stamp:
             return False
     return True
+
+
+def drop_stamps_missing_meta_roots(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    dumps_dir: Path,
+    stamps: dict[str, tuple[int, int]],
+) -> int:
+    """Remove stamps for ``Container/Name.xml`` when root object path is absent.
+
+    Lets incremental parse re-read meta XML that previously yielded nothing
+    (e.g. Report+SettingsStorage early-break) while children/assets already exist.
+    Mutates ``stamps`` in place; returns number of removed entries.
+    """
+    from app.services.kinds import CONTAINER_EN_TO_RU
+
+    if not stamps:
+        return 0
+    # rel → expected RU object path for top-level container XML only
+    candidates: list[tuple[str, str]] = []
+    for container_en, ru_plural in CONTAINER_EN_TO_RU.items():
+        prefix = f"{container_en}/"
+        for rel in list(stamps):
+            if not rel.startswith(prefix) or rel.count("/") != 1:
+                continue
+            if not rel.lower().endswith(".xml"):
+                continue
+            name = nfc(Path(rel).stem)
+            if not name:
+                continue
+            candidates.append((rel, f"{ru_plural}.{name}"))
+    if not candidates:
+        return 0
+    paths = [p for _rel, p in candidates]
+    existing: set[str] = set()
+    chunk = 400
+    for i in range(0, len(paths), chunk):
+        part = paths[i : i + chunk]
+        placeholders = ",".join("?" * len(part))
+        rows = conn.execute(
+            f"""
+            SELECT path FROM objects
+            WHERE entity_id=? AND path IN ({placeholders})
+            """,
+            (entity_id, *part),
+        ).fetchall()
+        for r in rows:
+            existing.add(str(r["path"]))
+    removed = 0
+    for rel, path in candidates:
+        if path in existing:
+            continue
+        if rel in stamps:
+            del stamps[rel]
+            removed += 1
+    return removed
 
 
 @dataclass

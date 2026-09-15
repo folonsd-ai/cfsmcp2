@@ -32,6 +32,7 @@ from app.services.dump_file_index import (
     REPORT_FILE_REL,
     DumpFileTracker,
     collect_sidecars,
+    drop_stamps_missing_meta_roots,
     file_stamp,
     tracked_files_unchanged,
 )
@@ -1841,7 +1842,16 @@ def _parse_dump_entity(entity_id: int) -> None:
         parse_gen = int(entity.get("parse_gen") or 0) + 1
 
         prev_stamps = dump_file_repo.load_stamps(conn, entity_id)
-        if tracked_files_unchanged(dumps_dir, prev_stamps):
+        missing_root_stamps = drop_stamps_missing_meta_roots(
+            conn, entity_id, dumps_dir, prev_stamps
+        )
+        if missing_root_stamps:
+            log.info(
+                "dump parse entity=%s invalidated %s meta stamps (missing object roots)",
+                entity_id,
+                missing_root_stamps,
+            )
+        if not missing_root_stamps and tracked_files_unchanged(dumps_dir, prev_stamps):
             timer.mark("stamp")
             unchanged = obj_repo.touch_all_objects_parse_gen(conn, entity_id, parse_gen)
             dump_file_repo.replace_stamps(conn, entity_id, prev_stamps)
