@@ -143,6 +143,10 @@ Windows portable без Docker/Python:
 
 > Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
 
+С каталогом установки (если путь не в команде — агент спросит один раз):
+
+> Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
+
 ## Preflight перед работой с tools
 
 1. MCP подключён и health OK.

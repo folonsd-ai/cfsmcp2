@@ -8,7 +8,18 @@
 
 Протокол рассчитан на **Windows, macOS и Linux**. Сначала определи ОС (не копируй PowerShell на Mac; на Unix предпочитай `python3`).
 
-Порт **8559**, MCP-имя **`cfsmcp2`**.
+Порт **8559** (Docker / native), MCP-имя **`cfsmcp2`**. **Windows portable** по умолчанию — порт **8561** (§4.5).
+
+### Команда пользователя агенту (примеры)
+
+| Способ | Что отправить агенту в Cursor |
+|---|---|
+| Docker (по умолчанию) | Установи cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md`. |
+| **Windows portable** | Установи cfsmcp2 **portable для Windows** по `AGENT-INSTALL.md` §4.5. |
+| Portable + каталог сразу | Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5. |
+| Skill + portable | Установи skill cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` и cfsmcp2 **portable для Windows** по `AGENT-INSTALL.md` §4.5. |
+
+Если пользователь явно просит **portable / exe / без Docker и без Python** на Windows — **не** уходи в §3 Docker и **не** спрашивай `MOUNT_POINTS` (источники 1С — «Локальный путь» в UI, §7). Клон репозитория для portable **не обязателен** (ZIP с Releases); клон нужен только для skill (§ Skill) или сборки ZIP разработчиком.
 
 ## Skill (правила использования tools)
 
@@ -47,12 +58,22 @@
 
 ## Цель
 
+**Ветка Docker (по умолчанию):**
+
 1. Проверить Docker (§2.1) и LM Studio (§2.2). Чего нет — **предложить установить** (Docker Desktop / LM Studio), не уходить в native молча и не пропускать LM Studio без слова.
 2. **Предложить точки подключения** и спросить host-пути к выгрузкам (§3.0) — до первого `compose up`. В том же коротком сообщении: таймзона контейнера — как на хосте или другое смещение (§3.15).
 3. Прописать пути в `docker-compose.yml` (`MOUNT_POINTS` + volumes), задать `TZ`, поднять **Docker** (native — §4, только по выбору пользователя).
 4. Проверить UI / health / runtime.
 5. Подключить MCP-сервер `cfsmcp2` в ИИ-клиенте.
 6. Кратко отчитаться.
+
+**Ветка Windows portable (§4.5)** — если пользователь просит portable или выбрал его в §2.1:
+
+1. LM Studio — по §2.2 (предложить, не ставить сам).
+2. **Спросить каталог установки** (§4.5.1), если пользователь **не** указал путь в запросе.
+3. Скачать ZIP с Releases, распаковать, запустить launcher / сервер, health на порту из launcher (по умолчанию **8561**).
+4. Подключить MCP с URL **из окна launcher** (не `:8559` по умолчанию).
+5. Кратко отчитаться (§8); контекст 1С — §7 («Локальный путь»).
 
 ## 1. Контекст
 
@@ -282,7 +303,53 @@ Health — как в §3. В UI: **«Локальный путь»** + «Обз�
 
 Когда предлагать: пользователь на Windows и просит portable / exe / «поставь без Docker»; или Docker нет, Python ставить не хочет. **Не** путай с native venv (§4) и **не** собирай PyInstaller без явной просьбы разработчика — для установки бери **готовый ZIP** с [GitHub Releases](https://github.com/folonsd-ai/cfsmcp2/releases/latest).
 
-### Установка
+### 4.5.1. Протокол агента (установка portable)
+
+Только **Windows**. Работай **вне** репозитория cfsmcp2 — в каталоге, который назвал пользователь (или который он подтвердил).
+
+**Куда ставить (обязательный вопрос).** Перед скачиванием ZIP **одним коротким сообщением** спроси полный путь к **пустому или уже используемому** каталогу установки, **если пользователь не написал его в запросе** (см. таблицу команд выше). **Не выдумывай** диски и папки; **не** распаковывай в `%TEMP%` как постоянную установку.
+
+Пример формулировки:
+
+> Куда распаковать portable cfsmcp2? Укажите полный путь (например `D:\tools\cfsmcp2` или `%LOCALAPPDATA%\Programs\cfsmcp2-portable`). В этой папке будет `cfsmcp2.exe`, рядом `data\` с индексами.
+
+| Ответ | Действие |
+|---|---|
+| Назвал путь | Нормализуй (`Expand-EnvironmentVariables`), создай каталог при необходимости |
+| «Как удобнее» / не знает | Предложи **один** вариант: `%LOCALAPPDATA%\Programs\cfsmcp2-portable` — и дождись «да» или другого пути |
+| В каталоге уже есть `cfsmcp2.exe` | Спроси: **обновить** (ZIP поверх, сохранить `data\` и `cfsmcp2.ini`) или **новая папка** |
+
+**Скачивание и распаковка** (предпочтительно `gh`, иначе API GitHub):
+
+```powershell
+$InstallRoot = "D:\tools\cfsmcp2"   # путь от пользователя
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+$Zip = Join-Path $env:TEMP "cfsmcp2-win-portable.zip"
+gh release download --repo folonsd-ai/cfsmcp2 --pattern "cfsmcp2-win-portable*.zip" --output $Zip
+Expand-Archive -Path $Zip -DestinationPath $InstallRoot -Force
+# если ZIP с корневой папкой — перенеси содержимое так, чтобы cfsmcp2.exe лежал прямо в $InstallRoot
+```
+
+Без `gh`: GET `https://api.github.com/repos/folonsd-ai/cfsmcp2/releases/latest`, asset с именем `cfsmcp2-win-portable-v*.zip`, скачать в `$Zip`, затем `Expand-Archive`. Если релиза ещё нет — только тогда из клона репозитория: `powershell -ExecutionPolicy Bypass -File packaging\package-portable.ps1`, ZIP в `dist\`.
+
+**Первый запуск.**
+
+1. Запусти GUI: `Start-Process -FilePath (Join-Path $InstallRoot "cfsmcp2.exe") -WorkingDirectory $InstallRoot`.
+2. Попроси пользователя нажать **Старт** в окне (или в трее), пока агент не может кликать по GUI — **не** выдумывай, что сервер уже online.
+3. Для проверки health **без GUI** (если пользователь согласен или окно недоступно): фоновый сервер тем же exe — `Start-Process -FilePath (Join-Path $InstallRoot "cfsmcp2.exe") -ArgumentList "--server" -WorkingDirectory $InstallRoot -WindowStyle Hidden`. Порт и host — из `cfsmcp2.ini` рядом с exe, если файл уже есть; иначе **8561** / `127.0.0.1`.
+4. Опционально перед первым GUI-запуском можно создать `cfsmcp2.ini` с `[launcher] autostart_server=true`, чтобы сервер стартовал сам — только если пользователь просил «без ручного Старт».
+
+**После «Запущен»:** health (порт из launcher / ini):
+
+```powershell
+curl.exe -sS --max-time 5 http://127.0.0.1:8561/api/health
+```
+
+**MCP:** смержи в `.cursor/mcp.json` URL **из поля MCP в окне** (по умолчанию `http://127.0.0.1:8561/mcp/`). Skill — по § Skill (клон + копия `.cursor/skills/cfsmcp2/`), если пользователь просил skill.
+
+**Не делай для portable:** правки `docker-compose.yml`, вопросы про `MOUNT_POINTS`, клон репозитория «ради сервера» (только ZIP или сборка при отсутствии релиза).
+
+### Установка (кратко для человека)
 
 1. Скачай архив `cfsmcp2-win-portable-v*.zip` из Releases (если релиза ещё нет — собери из клона: `powershell -ExecutionPolicy Bypass -File packaging\package-portable.ps1`, ZIP в `dist\`).
 2. Распакуй в любую папку, например `D:\tools\cfsmcp2-win-portable\`. В корне — **только** `cfsmcp2.exe`, рядом `_internal\`, при первом запуске создаётся `data\`.

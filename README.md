@@ -1,6 +1,6 @@
 # cfsmcp2
 
-Версия **0.2.35**
+Версия **0.2.36**
 
 > **Если ты ИИ-агент** и тебе нужно установить или обновить cfsmcp2, перейди к [AGENT-INSTALL.md](AGENT-INSTALL.md) и следуй инструкциям оттуда. Текущий файл — обзор для человека.
 
@@ -62,7 +62,7 @@ Linux / macOS — см. `.cursor/skills/cfsmcp2/SKILL.md` § «Установи�
 
 > Установи / обнови cfsmcp2 по `AGENT-INSTALL.md`.
 
-Агент сам клонирует (если нужно), проверяет Docker и LM Studio. Если Docker нет — предложит [Docker Desktop](https://docs.docker.com/get-docker/) (на Linux — Engine + Compose) или native (venv). Если на `127.0.0.1:1234` нет ответа — предложит [LM Studio](https://lmstudio.ai/) (Local Server, порт 1234). Дальше: предложит точки подключения (`MOUNT_POINTS` + volumes), health, MCP. Выгрузку 1С указывают через UI «Точка подключения» — без zip на сервер.
+Агент сам клонирует (если нужно), проверяет Docker и LM Studio. Если Docker нет — предложит [Docker Desktop](https://docs.docker.com/get-docker/) (на Linux — Engine + Compose), на Windows — **portable exe** (§4.5) или native (venv). Если на `127.0.0.1:1234` нет ответа — предложит [LM Studio](https://lmstudio.ai/) (Local Server, порт 1234). Дальше: для Docker — точки подключения (`MOUNT_POINTS` + volumes); для portable — ZIP с Releases в **каталог, который вы укажете** (агент спросит, если путь не в команде), health, MCP. Выгрузку 1С указывают в UI («Точка подключения» в Docker, «Локальный путь» в portable/native) — без zip на сервер.
 
 Если нужен именно локальный venv без контейнера:
 
@@ -71,6 +71,10 @@ Linux / macOS — см. `.cursor/skills/cfsmcp2/SKILL.md` § «Установи�
 На **Windows** без Docker и без Python — portable-сборка (exe + launcher):
 
 > Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
+
+С указанием каталога (агент не переспрашивает):
+
+> Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
 
 ### Windows Portable (exe)
 
