@@ -1,6 +1,6 @@
 # cfsmcp2
 
-Версия **0.2.36**
+Версия **0.2.37**
 
 > **Если ты ИИ-агент** и тебе нужно установить или обновить cfsmcp2, перейди к [AGENT-INSTALL.md](AGENT-INSTALL.md) и следуй инструкциям оттуда. Текущий файл — обзор для человека.
 
@@ -70,11 +70,11 @@ Linux / macOS — см. `.cursor/skills/cfsmcp2/SKILL.md` § «Установи�
 
 На **Windows** без Docker и без Python — portable-сборка (exe + launcher):
 
-> Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
+> Установи cfsmcp2 portable для Windows из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md` §4.5.
 
 С указанием каталога (агент не переспрашивает):
 
-> Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
+> Установи cfsmcp2 portable для Windows из `https://github.com/folonsd-ai/cfsmcp2` в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
 
 ### Windows Portable (exe)
 

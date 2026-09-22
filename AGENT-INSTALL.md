@@ -15,11 +15,11 @@
 | Способ | Что отправить агенту в Cursor |
 |---|---|
 | Docker (по умолчанию) | Установи cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md`. |
-| **Windows portable** | Установи cfsmcp2 **portable для Windows** по `AGENT-INSTALL.md` §4.5. |
-| Portable + каталог сразу | Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5. |
-| Skill + portable | Установи skill cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` и cfsmcp2 **portable для Windows** по `AGENT-INSTALL.md` §4.5. |
+| **Windows portable** | Установи cfsmcp2 **portable для Windows** из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md` §4.5. |
+| Portable + каталог сразу | Установи cfsmcp2 portable для Windows из `https://github.com/folonsd-ai/cfsmcp2` в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5. |
+| Skill + portable | Установи skill cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` и cfsmcp2 **portable для Windows** из того же репозитория по `AGENT-INSTALL.md` §4.5. |
 
-Если пользователь явно просит **portable / exe / без Docker и без Python** на Windows — **не** уходи в §3 Docker и **не** спрашивай `MOUNT_POINTS` (источники 1С — «Локальный путь» в UI, §7). Клон репозитория для portable **не обязателен** (ZIP с Releases); клон нужен только для skill (§ Skill) или сборки ZIP разработчиком.
+Если пользователь явно просит **portable / exe / без Docker и без Python** на Windows — **не** уходи в §3 Docker и **не** спрашивай `MOUNT_POINTS` (источники 1С — «Локальный путь» в UI, §7). **Откуда ставить:** ZIP `cfsmcp2-win-portable-v*.zip` с [GitHub Releases](https://github.com/folonsd-ai/cfsmcp2/releases/latest) этого репозитория (`gh release download --repo folonsd-ai/cfsmcp2`, §4.5.1). Клон исходников для portable **не обязателен**; клон нужен для skill (§ Skill) или сборки ZIP, если релиза ещё нет.
 
 ## Skill (правила использования tools)
 
@@ -305,7 +305,7 @@ Health — как в §3. В UI: **«Локальный путь»** + «Обз�
 
 ### 4.5.1. Протокол агента (установка portable)
 
-Только **Windows**. Работай **вне** репозитория cfsmcp2 — в каталоге, который назвал пользователь (или который он подтвердил).
+Только **Windows**. Источник сборки — репозиторий из запроса пользователя (по умолчанию `https://github.com/folonsd-ai/cfsmcp2`): скачай **последний** asset `cfsmcp2-win-portable-v*.zip` с Releases (`folonsd-ai/cfsmcp2`). Работай **вне** клона исходников — в каталоге установки, который назвал пользователь (или который он подтвердил).
 
 **Куда ставить (обязательный вопрос).** Перед скачиванием ZIP **одним коротким сообщением** спроси полный путь к **пустому или уже используемому** каталогу установки, **если пользователь не написал его в запросе** (см. таблицу команд выше). **Не выдумывай** диски и папки; **не** распаковывай в `%TEMP%` как постоянную установку.
 

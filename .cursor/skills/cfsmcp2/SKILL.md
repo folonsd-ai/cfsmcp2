@@ -139,13 +139,13 @@ Skill ≠ работающий MCP. Сервер поднимается отде
 
 > Установи cfsmcp2 из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md`.
 
-Windows portable без Docker/Python:
+Windows portable без Docker/Python (ZIP с GitHub Releases репозитория):
 
-> Установи cfsmcp2 portable для Windows по `AGENT-INSTALL.md` §4.5.
+> Установи cfsmcp2 portable для Windows из `https://github.com/folonsd-ai/cfsmcp2` по `AGENT-INSTALL.md` §4.5.
 
 С каталогом установки (если путь не в команде — агент спросит один раз):
 
-> Установи cfsmcp2 portable для Windows в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
+> Установи cfsmcp2 portable для Windows из `https://github.com/folonsd-ai/cfsmcp2` в `D:\tools\cfsmcp2` по `AGENT-INSTALL.md` §4.5.
 
 ## Preflight перед работой с tools
 
