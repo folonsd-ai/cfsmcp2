@@ -167,6 +167,7 @@ class UsageStats:
     events: deque[_Event] = field(default_factory=lambda: deque(maxlen=20000))
     log_lines: deque[_LogLine] = field(default_factory=lambda: deque(maxlen=MAX_LOG_LINES))
     _error_counts: dict[str, int] = field(default_factory=dict)
+    _context_resolve: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     _index_rollups: dict[tuple[str, str, str], _IndexRollup] = field(default_factory=dict)
     _stop_registered: bool = False
 
@@ -186,6 +187,11 @@ class UsageStats:
 
     def effective_log_level(self) -> LogLevel:
         return _active_log_level()
+
+    def note_context_resolve(self, code: str) -> None:
+        key = (code or "ok").strip() or "unknown"
+        with self._lock:
+            self._context_resolve[key] = int(self._context_resolve.get(key, 0)) + 1
 
     def _cutoff(self, now: float | None = None) -> float:
         return (now if now is not None else time.time()) - self.retention_window_sec()
@@ -774,6 +780,7 @@ class UsageStats:
                 {"context": k, "calls": v}
                 for k, v in sorted(by_context.items(), key=lambda x: -x[1])[:20]
             ],
+            "context_resolve": dict(self._context_resolve),
             "timeline": timeline,
             "recent": recent,
             "recent_log": recent_log,

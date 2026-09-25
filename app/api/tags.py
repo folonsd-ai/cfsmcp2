@@ -64,6 +64,12 @@ def create_tag(body: TagCreate) -> TagOut:
     try:
         if tag_repo.get_tag_by_name(conn, name):
             raise HTTPException(409, f"Tag already exists: {name}")
+        from app.services.context_invariants import ContextKeyConflict, assert_tag_name_allowed
+
+        try:
+            assert_tag_name_allowed(conn, name)
+        except ContextKeyConflict as exc:
+            raise HTTPException(400, str(exc)) from exc
         tid = tag_repo.create_tag(conn, name, color=body.color)
         conn.commit()
         row = tag_repo.get_tag(conn, tid)
@@ -130,6 +136,12 @@ def patch_tag(tag_id: int, body: TagPatch) -> TagOut:
             other = tag_repo.get_tag_by_name(conn, name)
             if other and int(other["id"]) != tag_id:
                 raise HTTPException(409, f"Tag already exists: {name}")
+            from app.services.context_invariants import ContextKeyConflict, assert_tag_name_allowed
+
+            try:
+                assert_tag_name_allowed(conn, name, exclude_tag_id=tag_id)
+            except ContextKeyConflict as exc:
+                raise HTTPException(400, str(exc)) from exc
         tag_repo.update_tag(
             conn, tag_id, name=name, color=body.color, sort_order=body.sort_order
         )

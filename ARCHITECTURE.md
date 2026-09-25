@@ -1,6 +1,6 @@
 # ARCHITECTURE — cfsmcp2
 
-Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.37**
+Версия документа: **1.5** · дата: **2026-08-25** · продукт **0.2.38**
 
 ---
 
@@ -30,7 +30,7 @@
 │  Browser UI (index.html, i18n.js, ide-console.css, JSZip, Chart.js) │
 │  GET /  ·  /static/                                         │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI (app/main.py)  version 0.2.37                      │
+│  FastAPI (app/main.py)  version 0.2.38                      │
 │  /api/*  ·  /mcp/  (Streamable HTTP, FastMCP)               │
 ├──────────────┬──────────────────────┬───────────────────────┤
 │  SQLite      │  zvec (per entity)   │  LM Studio :1234      │
@@ -155,7 +155,7 @@ uploaded → parsing → parsed → indexing → ready
 
 1. Декодирование txt (UTF-16LE BOM / UTF-8 / cp1251).
 2. Streaming узлов отчёта → objects/links батчами в SQLite.
-3. `exclude_name_substrings` (каскадно, регистронезависимо).
+3. `exclude_name_substrings` (каскадно, регистронезависимо). Список исключений в UI сохраняется PATCH без разбора; применяется при следующей **«Загрузке»** / import-path.
 4. Auto reindex.
 
 **Dump** (`_parse_dump_entity`):

@@ -4224,7 +4224,7 @@
       const excludeField = document.getElementById('sourceExcludeField');
       if (excludeField) {
         excludeField.value = formatExcludeText(profile.exclude_name_substrings);
-        excludeField.disabled = busy.has(e.status);
+        excludeField.disabled = excludeEditBusy.has(e.status);
       }
       syncSourceModalForEntity(e);
       renderSourceEmbedInfo(e);
@@ -4271,7 +4271,10 @@
       const commentChanged = nextComment !== prevComment;
       const excludeChanged = !excludeListsEqual(nextExclude, prevExclude);
       if (!pathChanged && !commentChanged && !excludeChanged) return { saved: false, error: null, unchanged: true };
-      if (busy.has(e.status) && (pathChanged || excludeChanged)) {
+      if (pathChanged && busy.has(e.status)) {
+        return { saved: false, error: t('dnd.busyRow') };
+      }
+      if (excludeChanged && excludeEditBusy.has(e.status)) {
         return { saved: false, error: t('dnd.busyRow') };
       }
       if (pathChanged && nextPath && !isAbsoluteLocalPath(nextPath)) {
@@ -4306,7 +4309,7 @@
           if (updated.file_path != null) cached.file_path = updated.file_path || '';
           if (updated.ingest_profile) cached.ingest_profile = updated.ingest_profile;
         }
-        return { saved: true, error: null, reparse: excludeChanged };
+        return { saved: true, error: null };
       } catch (err) {
         return { saved: false, error: String(err && err.message ? err.message : err) };
       }
@@ -4394,7 +4397,7 @@
       const id = sourceModalEntityId;
       if (!id) return;
       const e = entitiesById[id];
-      if (!e || busy.has(e.status)) return showAlert(t('dnd.busyRow'), t('source.loadDir'));
+      if (!e || pipelineActive.has(e.status)) return showAlert(t('dnd.busyRow'), t('source.loadDir'));
       const path = (document.getElementById('sourcePathField').value || '').trim();
       const comment = document.getElementById('sourceCommentField')?.value != null
         ? String(document.getElementById('sourceCommentField').value)
@@ -4444,7 +4447,7 @@
 
     async function refreshEntitySource(id) {
       const e = entitiesById[id];
-      if (!e || busy.has(e.status)) return showAlert(t('dnd.busyRow'), t('row.refresh'));
+      if (!e || pipelineActive.has(e.status)) return showAlert(t('dnd.busyRow'), t('row.refresh'));
       rowUploadTargetId = id;
       if (e.source_mode === 'dump') {
         document.getElementById('rowRefreshZip').value = '';
@@ -4519,6 +4522,8 @@
     };
 
     const busy = new Set(['uploaded','parsing','indexing','loading_modules']);
+    const pipelineActive = new Set(['parsing','indexing','loading_modules']);
+    const excludeEditBusy = pipelineActive;
     let settings = {
       lm_studio_url: '', default_embedding_model: '', embedding_workers: 2,
       ui_poll_interval_sec: 2, ui_show_objects_col: true, ui_show_model_col: false,

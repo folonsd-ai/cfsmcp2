@@ -11,17 +11,18 @@ from app.core.database import connect
 from app.repositories import entities as ent_repo
 from app.repositories import tags as tag_repo
 from app.services import search as search_svc
+from app.services.context_errors import mcp_error_dict
 from app.services.usage_stats import usage_stats
 
 _CTX_DESC = (
-    "Exact entity name (configuration/extension) as in the user's request or list_contexts, "
-    "OR tag:TagName from list_context_groups (only when the user asked to search a tag group). "
-    "If the user named a context — pass that name only; do NOT loop the same query over other contexts. "
+    "First call: pass the user's context string as-is (do not retype CamelCase). "
+    "Later calls: copy effective_context, contexts, or hit.context from cfsmcp2 JSON only. "
+    "OR tag:TagName for a tag group search. Do NOT fan-out the same query over all contexts. "
     "Example: РасширениеКонтурЛогистика or tag:КА2"
 )
 _CTX_SINGLE_DESC = (
-    "Exact single entity name (from the user, list_contexts, or a hit's 'context' field). "
-    "Never pass tag:… here. Never substitute a different context than the one in the question."
+    "First call: user's context string as-is. Then copy effective_context or hit.context from JSON. "
+    "Never pass tag:… on get_* tools."
 )
 
 mcp = FastMCP(
@@ -30,14 +31,14 @@ mcp = FastMCP(
         "Search 1C metadata/BSL in MCP contexts (configuration or extension names).\n"
         "\n"
         "CONTEXT SCOPING (mandatory):\n"
-        "- If the user names a context (e.g. «в РасширениеКонтурЛогистика…») — use ONLY that "
-        "exact name in every search_metadata / semantic_search / find_* / get_* call.\n"
-        "- Do NOT call list_contexts first when the context is already named.\n"
+        "- Pass the user's context string once as-is; after the response copy only "
+        "effective_context / hit.context / contexts / candidates from JSON — never retype CamelCase.\n"
+        "- list_contexts when the context is unknown or the tool returned unknown/ambiguous.\n"
         "- Do NOT fan-out: never repeat the same query across all contexts from list_contexts.\n"
         "- Search other contexts only if the user explicitly asks (all configs, another name, "
         "or a tag group).\n"
         "- Multi-context search only via context=tag:TagName when the user asked for that tag.\n"
-        "- Partial context names may resolve uniquely; if several candidates are returned, pick one.\n"
+        "- Partial context names return ambiguous with candidates — pick one name from the list.\n"
         "\n"
         "Workflow when context is UNKNOWN: list_contexts or list_context_groups → pick one name → "
         "search_metadata | semantic_search → get_object / get_links / find_usages / "
@@ -120,38 +121,38 @@ def _tool_budget(tool_name: str):
 
 
 def _track(tool_name: str, fn, *, context: str = "", **tool_args):
+    from app.mcp.tracking import handle_mcp_track_finally
     from app.services import mcp_busy
+    from app.services.context_errors import is_defer_eligible
 
     t0 = time.perf_counter()
-    ok = True
+    client_ok = True
     detail = ""
     result = None
     call_id = mcp_busy.begin(tool_name, context=context or "")
     busy_summary = None
+    search_tools = {
+        "search_metadata",
+        "semantic_search",
+        "helpsearch",
+        "search_under",
+        "search_forms",
+    }
     try:
         result = fn()
+        result = search_svc.stitch_context_meta_into_result(result)
         if isinstance(result, dict) and result.get("error"):
-            ok = False
+            client_ok = False
             detail = str(result.get("error"))[:800]
         return result
     except Exception as exc:
-        ok = False
+        client_ok = False
         detail = str(exc)[:800]
         raise
     finally:
         busy_summary = mcp_busy.end(call_id)
         ms = (time.perf_counter() - t0) * 1000
-        # Persist handled below with replayable args (not the short usage line).
-        usage_stats.record(
-            kind="mcp",
-            name=tool_name,
-            ok=ok,
-            duration_ms=ms,
-            context=context,
-            detail=detail[:200],
-            tier="usage",
-            persist=False,
-        )
+        replay = ""
         try:
             from app.services import app_log as app_log_svc
 
@@ -162,20 +163,12 @@ def _track(tool_name: str, fn, *, context: str = "", **tool_args):
                 args=tool_args,
                 result=result,
                 error=detail,
-                ok=ok,
+                ok=client_ok,
                 busy=busy_summary,
             )
+            defer_eligible = isinstance(result, dict) and is_defer_eligible(result)
             not_found = "not found in context" in detail
-            if not ok:
-                if not not_found:
-                    app_log_svc.append_error(
-                        kind="mcp",
-                        name=tool_name,
-                        detail=replay,
-                        context=context,
-                        duration_ms=ms,
-                    )
-            else:
+            if client_ok:
                 app_log_svc.maybe_slow(
                     kind="mcp",
                     name=tool_name,
@@ -184,10 +177,32 @@ def _track(tool_name: str, fn, *, context: str = "", **tool_args):
                     detail=replay,
                     ok=True,
                 )
+            elif not defer_eligible and not not_found:
+                app_log_svc.append_error(
+                    kind="mcp",
+                    name=tool_name,
+                    detail=replay,
+                    context=context,
+                    duration_ms=ms,
+                )
         except Exception:
             pass
-        if not ok and detail and "not found in context" not in detail:
-            # In-memory errors-level line; SQLite already has full replay above.
+        handle_mcp_track_finally(
+            tool_name=tool_name,
+            context_arg=context,
+            result=result,
+            client_ok=client_ok,
+            detail=detail,
+            duration_ms=ms,
+            replay=replay,
+            for_search=tool_name in search_tools,
+        )
+        if (
+            not client_ok
+            and detail
+            and "not found in context" not in detail
+            and not (isinstance(result, dict) and is_defer_eligible(result))
+        ):
             usage_stats.record_error_detail(
                 kind="mcp",
                 name=tool_name,
@@ -198,7 +213,7 @@ def _track(tool_name: str, fn, *, context: str = "", **tool_args):
             )
         usage_stats.record_mcp_verbose(
             name=tool_name,
-            ok=ok,
+            ok=client_ok,
             duration_ms=ms,
             context=context,
             args=tool_args,
@@ -325,7 +340,7 @@ def search_metadata(
                 budget=_tool_budget("search_metadata"),
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "search_metadata",
@@ -378,7 +393,7 @@ def search_under(
                 compact=compact,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "search_under",
@@ -428,7 +443,7 @@ def semantic_search(
                 budget=_tool_budget("semantic_search"),
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "semantic_search",
@@ -480,7 +495,7 @@ def helpsearch(
                 compact=compact,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "helpsearch",
@@ -517,7 +532,7 @@ def get_required_fields(
         try:
             return search_svc.get_required_fields(context, path)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_required_fields", _run, context=context, path=path)
 
@@ -552,7 +567,7 @@ def get_object(
         try:
             return search_svc.get_object(context, path, detail_level=detail_level)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_object", _run, context=context, path=path)
 
@@ -581,7 +596,7 @@ def get_links(
         try:
             return search_svc.get_links(context, object, direction)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_links", _run, context=context, object=object, direction=direction)
 
@@ -626,7 +641,7 @@ def get_query_path(
                 limit=limit,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "get_query_path",
@@ -687,7 +702,7 @@ def find_usages(
                 offset=offset,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "find_usages",
@@ -748,7 +763,7 @@ def get_object_dossier(
                 offset=offset,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "get_object_dossier",
@@ -812,7 +827,7 @@ def trace_impact(
                 offset=offset,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "trace_impact",
@@ -866,7 +881,7 @@ def trace_call_chain(
                 context, path, direction=direction, depth=depth, limit=limit
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "trace_call_chain",
@@ -916,7 +931,7 @@ def list_code_modules(
         try:
             return search_svc.list_code_modules(context, kind=kind, q=q)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "list_code_modules", _run, context=context, kind=kind, q=q
@@ -965,7 +980,7 @@ def list_methods(
                 limit=limit,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "list_methods",
@@ -1035,7 +1050,7 @@ def find_methods(
                 budget=_tool_budget("find_methods"),
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "find_methods",
@@ -1076,7 +1091,7 @@ def get_method(
         try:
             return search_svc.get_method(context, path)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_method", _run, context=context, path=path)
 
@@ -1104,7 +1119,7 @@ def get_module_structure(
         try:
             return search_svc.get_module_structure(context, module_path)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_module_structure", _run, context=context, module_path=module_path)
 
@@ -1161,7 +1176,7 @@ def find_code_references(
                 literal=literal,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "find_code_references",
@@ -1198,7 +1213,7 @@ def get_skd(
         try:
             return search_svc.get_skd(context, path)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_skd", _run, context=context, path=path)
 
@@ -1231,7 +1246,7 @@ def compare_objects(
         try:
             return search_svc.compare_objects(context, path_a, path_b)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("compare_objects", _run, context=context, path_a=path_a, path_b=path_b)
 
@@ -1275,7 +1290,7 @@ def search_forms(
                 compact=compact,
             )
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track(
         "search_forms",
@@ -1310,7 +1325,7 @@ def queue_managed_form_reembed(
         try:
             return search_svc.queue_managed_form_reembed(context)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("queue_managed_form_reembed", _run, context=context)
 
@@ -1338,7 +1353,7 @@ def queue_method_reembed(
         try:
             return search_svc.queue_method_reembed(context)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("queue_method_reembed", _run, context=context)
 
@@ -1375,7 +1390,7 @@ def find_by_guid(
         try:
             return search_svc.find_by_guid(context, guid, limit=limit)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("find_by_guid", _run, context=context, guid=guid, limit=limit)
 
@@ -1402,6 +1417,6 @@ def get_indexing_status(
         try:
             return search_svc.get_indexing_status(context_ref)
         except Exception as exc:
-            return {"error": str(exc)}
+            return mcp_error_dict(exc)
 
     return _track("get_indexing_status", _run, context=context_ref or "")

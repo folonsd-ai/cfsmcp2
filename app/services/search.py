@@ -1664,105 +1664,79 @@ def _doc_hit(d, *, context_name: str) -> dict:
     }
 
 
+def _set_pending_context_meta(res) -> None:
+    import threading
+
+    threading.current_thread()._cfsmcp_ctx_meta = res  # type: ignore[attr-defined]
+
+
+def stitch_context_meta_into_result(out: dict | list | None) -> dict | list | None:
+    """Attach effective_context / matched_by to get_* tool bodies (thread-local meta)."""
+    import threading
+
+    meta = getattr(threading.current_thread(), "_cfsmcp_ctx_meta", None)
+    if meta is not None:
+        try:
+            del threading.current_thread()._cfsmcp_ctx_meta  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    if meta is None or not isinstance(out, dict):
+        return out
+    from app.services.context_errors import attach_resolution_fields
+
+    attach_resolution_fields(
+        out,
+        effective_context=meta.effective_context,
+        matched_by=meta.matched_by,
+        input_context=meta.input_context if meta.matched_by != "exact" else None,
+    )
+    return out
+
+
 def resolve_context(
     context: str,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
     """Load a single ready+enabled entity by name. Rejects tag: refs (use for get_* tools)."""
-    kind, value = parse_context_ref(context)
-    if kind == "tag":
-        raise ValueError(
-            f"'{context}' is a tag group, not a single context. "
-            "Use an entity name from list_contexts / list_context_groups "
-            "or from a search hit's 'context' field. "
-            "For group search pass tag:… to search_metadata / semantic_search."
-        )
-    return _resolve_context_by_name(value, conn)
+    from app.services.context_resolve import resolve_context_group_raw
+
+    res = resolve_context_group_raw(context, conn, for_get=True)
+    _set_pending_context_meta(res)
+    return res.entities[0]
 
 
 def _resolve_context_by_name(
     name: str,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
-    now = time.monotonic()
-    with _entity_cache_lock:
-        hit = _entity_cache.get(name)
-        if hit is not None and (now - hit[0]) < _ENTITY_TTL_SEC:
-            return _validate_ready_entity(hit[1], name)
-
-    own_conn = conn is None
-    if own_conn:
-        conn = connect(settings.db_path)
-    assert conn is not None
-    try:
-        entity = ent_repo.get_entity_by_name(conn, name)
-        resolved_name = name
-        if not entity:
-            cands = _suggest_context_candidates(name, conn)
-            if len(cands) == 1:
-                resolved_name = cands[0]
-                entity = ent_repo.get_entity_by_name(conn, resolved_name)
-            elif len(cands) > 1:
-                raise ValueError(
-                    f"Unknown context '{name}'. Candidates: {', '.join(cands)}. "
-                    "Pass the exact name from list_contexts."
-                )
-            else:
-                raise ValueError(
-                    f"Unknown context '{name}'. Call list_contexts or list_context_groups "
-                    f"(tag:Name for a group)."
-                )
-        if not entity:
-            raise ValueError(
-                f"Unknown context '{name}'. Call list_contexts or list_context_groups "
-                f"(tag:Name for a group)."
-            )
-        validated = _validate_ready_entity(dict(entity), resolved_name)
-        with _entity_cache_lock:
-            _entity_cache[resolved_name] = (time.monotonic(), dict(validated))
-            if resolved_name != name:
-                _entity_cache[name] = (time.monotonic(), dict(validated))
-        return validated
-    finally:
-        if own_conn:
-            conn.close()
+    return resolve_context(name, conn)
 
 
 def resolve_context_group(
     context: str,
     conn: sqlite3.Connection | None = None,
-) -> tuple[str, str | None, list[dict]]:
-    """Resolve name or tag:… to a list of ready entities.
+):
+    """Resolve name or tag:… to ready entities.
 
-    Returns (ref, tag_or_none, entities).
+    Returns (effective_context, tag_or_none, entities, resolution_meta).
     """
-    kind, value = parse_context_ref(context)
-    own_conn = conn is None
-    if own_conn:
-        conn = connect(settings.db_path)
-    assert conn is not None
-    try:
-        if kind == "name":
-            ent = _resolve_context_by_name(value, conn)
-            return context, None, [ent]
-        rows = ent_repo.list_ready_entities_for_tag(conn, value)
-        if not rows:
-            # Distinguish unknown tag vs empty group
-            from app.repositories import tags as tag_repo
+    from app.services.context_resolve import resolve_context_group_raw
 
-            if not tag_repo.get_tag_by_name(conn, value):
-                raise ValueError(
-                    f"Unknown tag '{value}'. Call list_context_groups to see tags."
-                )
-            raise ValueError(
-                f"Tag '{value}' has no enabled ready contexts. "
-                "Enable/index members in the UI or pick another tag."
-            )
-        entities = [_validate_ready_entity(dict(r), r["name"]) for r in rows]
-        return context, value, entities
-    finally:
-        if own_conn:
-            conn.close()
+    res = resolve_context_group_raw(context, conn, for_get=False)
+    _set_pending_context_meta(res)
+    return res.effective_context, res.tag, res.entities, res
+
+
+def _apply_search_context_meta(out: dict, meta) -> None:
+    from app.services.context_errors import attach_resolution_fields
+
+    attach_resolution_fields(
+        out,
+        effective_context=meta.effective_context,
+        matched_by=meta.matched_by,
+        input_context=meta.input_context if meta.matched_by != "exact" else None,
+    )
+    out["contexts"] = [e["name"] for e in meta.entities]
 
 
 def _merge_scored_hits(
@@ -1810,7 +1784,7 @@ def fts_search(
     budget: ToolBudget | None = None,
 ) -> dict:
     timer = PhaseTimer()
-    ref, tag, entities = resolve_context_group(context)
+    ref, tag, entities, ctx_meta = resolve_context_group(context)
     timer.lap("resolve")
     prefix = (path_prefix or "").strip() or None
     if literal:
@@ -1826,6 +1800,7 @@ def fts_search(
             path_prefix=prefix,
             compact=compact,
             timer=timer,
+            ctx_meta=ctx_meta,
         )
     # kind=Report: do not filter FTS/SQL by kind (roots often absent); search tree + promote.
     search_kind, prefix, prefer_report_roots = _report_search_scope(kind, prefix)
@@ -2008,6 +1983,7 @@ def fts_search(
         )
         base = str(out.get("hint") or "").strip()
         out["hint"] = f"{base}; {skip_note}" if base else skip_note
+    _apply_search_context_meta(out, ctx_meta)
     return out
 
 
@@ -2024,6 +2000,7 @@ def _literal_metadata_search(
     path_prefix: str | None,
     compact: bool,
     timer: PhaseTimer,
+    ctx_meta=None,
 ) -> dict:
     """SQL substring path for exact identifiers / error fragments (no FTS)."""
     q = (query or "").strip()
@@ -2049,6 +2026,8 @@ def _literal_metadata_search(
             timer,
             scale={"objects": objects_sum, "contexts": len(entities), "limit": limit, "hits": 0},
         )
+        if ctx_meta is not None:
+            _apply_search_context_meta(out, ctx_meta)
         return out
 
     # Guard on caller-supplied path_prefix only (before kind=Report injects
@@ -2079,6 +2058,8 @@ def _literal_metadata_search(
             timer,
             scale={"objects": objects_sum, "contexts": len(entities), "limit": limit, "hits": 0},
         )
+        if ctx_meta is not None:
+            _apply_search_context_meta(out, ctx_meta)
         return out
 
     # kind=Report: widen like FTS (roots often lack kind=Report in dump).
@@ -2220,6 +2201,8 @@ def _literal_metadata_search(
             if prefix
             else "literal indexed name/path equality (unscoped mid-string skipped)"
         )
+    if ctx_meta is not None:
+        _apply_search_context_meta(out, ctx_meta)
     return out
 
 
@@ -2233,7 +2216,7 @@ def semantic_search(
     budget: ToolBudget | None = None,
 ) -> dict:
     timer = PhaseTimer()
-    ref, tag, entities = resolve_context_group(context)
+    ref, tag, entities, ctx_meta = resolve_context_group(context)
     timer.lap("resolve")
     prefix = (path_prefix or "").strip() or None
     fetch_n = top_n * 8 if (prefix or (tag and len(entities) > 1)) else top_n
@@ -2444,6 +2427,7 @@ def semantic_search(
         )
         base = str(out.get("hint") or "").strip()
         out["hint"] = f"{base}; {skip_note}" if base else skip_note
+    _apply_search_context_meta(out, ctx_meta)
     return out
 
 
@@ -2461,7 +2445,7 @@ def help_search(
     (comment = текст раздела, props.owner — объект-владелец). ``owner`` —
     необязательный фильтр по объекту (``Документы.ТранспортнаяНакладная``).
     """
-    ref, tag, entities = resolve_context_group(context)
+    ref, tag, entities, ctx_meta = resolve_context_group(context)
     prefix = None
     if owner:
         prefix = f"Help.{owner.strip().rstrip('.')}"
@@ -2536,7 +2520,9 @@ def help_search(
     warn = None if tag else _note_fanout(query, [e["name"] for e in entities])
     if warn:
         out["fanout_warning"] = warn
-    return _compact_results(out, compact=compact)
+    out = _compact_results(out, compact=compact)
+    _apply_search_context_meta(out, ctx_meta)
+    return out
 
 
 def search_under(

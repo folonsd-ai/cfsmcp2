@@ -36,13 +36,18 @@ def get_entity_by_name(conn: sqlite3.Connection, name: str) -> dict[str, Any] | 
 
 def suggest_unique_name(conn: sqlite3.Connection, base: str) -> str:
     """Return ``base`` or ``base_2`` / ``base_3`` / … that is not yet used."""
+    from app.services.context_invariants import ContextKeyConflict, assert_entity_name_allowed
+
     raw = (base or "").strip() or "config"
-    if not get_entity_by_name(conn, raw):
-        return raw
-    for i in range(2, 1000):
-        cand = f"{raw}_{i}"
-        if not get_entity_by_name(conn, cand):
-            return cand
+    for i in range(1, 1000):
+        cand = raw if i == 1 else f"{raw}_{i}"
+        if get_entity_by_name(conn, cand):
+            continue
+        try:
+            assert_entity_name_allowed(conn, cand)
+        except ContextKeyConflict:
+            continue
+        return cand
     return f"{raw}_new"
 
 
@@ -167,6 +172,12 @@ def upsert_entity(
             ),
         )
         return int(existing["id"])
+    from app.services.context_invariants import ContextKeyConflict, assert_entity_name_allowed
+
+    try:
+        assert_entity_name_allowed(conn, name)
+    except ContextKeyConflict as exc:
+        raise ValueError(str(exc)) from exc
     cur = conn.execute(
         """
         INSERT INTO entities(
@@ -351,6 +362,12 @@ def rename_entity(conn: sqlite3.Connection, entity_id: int, new_name: str) -> di
     other = get_entity_by_name(conn, name)
     if other and int(other["id"]) != int(entity_id):
         raise ValueError(f"Name already used: {name}")
+    from app.services.context_invariants import ContextKeyConflict, assert_entity_name_allowed
+
+    try:
+        assert_entity_name_allowed(conn, name, exclude_entity_id=entity_id)
+    except ContextKeyConflict as exc:
+        raise ValueError(str(exc)) from exc
 
     version = row.get("version") or ""
     auto_old = comment_from_name_version(old_name, version)
@@ -361,7 +378,7 @@ def rename_entity(conn: sqlite3.Connection, entity_id: int, new_name: str) -> di
     try:
         from app.services.search import invalidate_entity_cache
 
-        invalidate_entity_cache(old_name)
+        invalidate_entity_cache(None)
     except Exception:
         pass
 
@@ -376,7 +393,7 @@ def rename_entity(conn: sqlite3.Connection, entity_id: int, new_name: str) -> di
     try:
         from app.services.search import invalidate_entity_cache
 
-        invalidate_entity_cache(name)
+        invalidate_entity_cache(None)
     except Exception:
         pass
     updated = get_entity(conn, entity_id)

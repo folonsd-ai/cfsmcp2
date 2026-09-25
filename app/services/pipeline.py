@@ -834,6 +834,12 @@ def _apply_report_meta(conn, entity_id: int, entity: dict, meta) -> tuple[int, d
                 f"Report name '{target_name}' already used by entity #{other['id']}. "
                 "Re-upload with merge confirmation or a different Name override."
             )
+        from app.services.context_invariants import ContextKeyConflict, assert_entity_name_allowed
+
+        try:
+            assert_entity_name_allowed(conn, target_name, exclude_entity_id=entity_id)
+        except ContextKeyConflict as exc:
+            raise ValueError(str(exc)) from exc
         conn.execute(
             """
             UPDATE entities SET name=?, synonym=?, version=?, comment=?, entity_type=?, updated_at=datetime('now')
