@@ -47,7 +47,7 @@
 | MCP | **FastMCP** (`app/mcp/server.py`), mount `/mcp`, transport `streamable-http`, имя **`cfsmcp2`** |
 | Хранилище метаданных | **SQLite** (`DB_PATH`, default `./data/cfsmcp2.sqlite3`) |
 | Полнотекст + семантика | **zvec** — коллекция на сущность и модель эмбеддинга |
-| Эмбеддинги | **LM Studio** OpenAI-compatible API (`LM_STUDIO_URL`, workers 1/2/4/8/12/16) |
+| Эмбеддинги | **LM Studio** OpenAI-compatible API (`LM_STUDIO_URL`, workers 1/2/4/8/12/16) — дефолт; переключение на RouterAI (`EMBEDDINGS_PROVIDER`, `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_API_KEY`) |
 | Python | **3.13+** |
 | Контейнер | **Docker** (`docker-compose.yml`): `./data:/data`, **`MOUNT_POINTS`** + bind-mounts выгрузок, LM Studio через `host.docker.internal:1234` — **рекомендуемый** способ |
 | Native-run | `python app/main.py` из venv — запасной путь (локальный «Обзор…») |

@@ -7,7 +7,11 @@ from collections import OrderedDict
 
 import httpx
 
-from app.services.runtime_settings import get_lm_studio_url
+from app.services import embedding_providers as ep
+from app.services.runtime_settings import (
+    get_embedding_api_key,
+    get_embedding_base_url,
+)
 from app.services.usage_stats import usage_stats
 
 log = logging.getLogger("cfsmcp2.embeddings")
@@ -147,13 +151,21 @@ class EmbeddingClient:
         self,
         base_url: str | None = None,
         *,
+        api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = DEFAULT_READ_TIMEOUT,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         backoff_sec: tuple[float, ...] = DEFAULT_BACKOFF_SEC,
     ):
-        self.base_url = (base_url or get_lm_studio_url()).rstrip("/")
+        self.base_url = ep.normalize_base_url(
+            base_url if base_url is not None else get_embedding_base_url()
+        )
+        self.api_key = (
+            get_embedding_api_key() if api_key is None else (api_key or '').strip()
+        )
+        self._auth_headers = ep.auth_headers(self.api_key)
+        self._auth_tag = ep.auth_tag(self.api_key)
         if isinstance(timeout, httpx.Timeout):
             self.timeout = timeout
         elif timeout is not None:
@@ -165,12 +177,16 @@ class EmbeddingClient:
         self.backoff_sec = backoff_sec
 
     def _embed_remote(self, payload_input: list[str], model: str) -> list[list[float]]:
-        url = f"{self.base_url}/v1/embeddings"
+        url = ep.endpoint_for(self.base_url, "embeddings")
         client = _get_shared_client(self.timeout)
         last_exc: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                resp = client.post(url, json={"model": model, "input": payload_input})
+                resp = client.post(
+                    url,
+                    json={"model": model, "input": payload_input},
+                    headers=self._auth_headers,
+                )
                 resp.raise_for_status()
                 data = resp.json()["data"]
                 data.sort(key=lambda x: x["index"])
@@ -191,7 +207,7 @@ class EmbeddingClient:
         assert last_exc is not None
         if _is_transient(last_exc):
             raise LmStudioUnavailable(
-                f"LM Studio unavailable at {self.base_url}: {last_exc}"
+                f"Embedding endpoint unavailable at {url}: {last_exc}"
             ) from last_exc
         raise last_exc
 
@@ -216,7 +232,7 @@ class EmbeddingClient:
                 miss_idx: list[int] = []
                 miss_payload: list[str] = []
                 for i, text in enumerate(texts):
-                    key = (self.base_url, model, True, text)
+                    key = (self.base_url, self._auth_tag, model, True, text)
                     cached = _query_cache_get(key)
                     if cached is not None:
                         results[i] = cached
@@ -229,7 +245,9 @@ class EmbeddingClient:
                     for j, vec in enumerate(remote):
                         i = miss_idx[j]
                         results[i] = vec
-                        _query_cache_put((self.base_url, model, True, texts[i]), vec)
+                        _query_cache_put(
+                            (self.base_url, self._auth_tag, model, True, texts[i]), vec
+                        )
                 detail = f"batch={len(texts)} model={model} cache_hits={cache_hits}"
                 return [v if v is not None else [] for v in results]
 
@@ -282,7 +300,7 @@ class EmbeddingClient:
         return out
 
     def dims(self, model: str) -> int:
-        key = (self.base_url, model)
+        key = (self.base_url, self._auth_tag, model)
         with _dims_lock:
             hit = _dims_cache.get(key)
         if hit:

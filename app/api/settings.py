@@ -8,14 +8,16 @@ from app.core.config import settings
 from app.core.database import connect
 from app.core.version import APP_VERSION
 from app.schemas.settings import (
+    BalanceOut,
     DbInfoOut,
+    EmbeddingProbeIn,
     McpToolsResponse,
     ModelsResponse,
     SettingsOut,
     SettingsPatch,
     VacuumResponse,
 )
-from app.services import lm_studio, runtime_settings
+from app.services import balance, embedding_providers, lm_studio, runtime_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -49,6 +51,21 @@ def patch_settings(body: SettingsPatch) -> SettingsOut:
         url = body.lm_studio_url.strip().rstrip("/")
         if not (url.startswith("http://") or url.startswith("https://")):
             raise HTTPException(400, "lm_studio_url must start with http:// or https://")
+    if body.embedding_provider is not None:
+        prov = body.embedding_provider.strip().lower()
+        if prov not in embedding_providers.ALLOWED_PROVIDERS:
+            raise HTTPException(
+                400,
+                "embedding_provider must be one of: "
+                + ", ".join(sorted(embedding_providers.ALLOWED_PROVIDERS)),
+            )
+        body.embedding_provider = prov
+    if body.embedding_base_url is not None:
+        base = body.embedding_base_url.strip()
+        if base and not embedding_providers.is_http_url(base):
+            raise HTTPException(
+                400, "embedding_base_url must start with http:// or https://"
+            )
     if body.embedding_workers is not None:
         if body.embedding_workers not in runtime_settings.ALLOWED_EMBEDDING_WORKERS:
             raise HTTPException(
@@ -111,6 +128,9 @@ def patch_settings(body: SettingsPatch) -> SettingsOut:
             )
     data = runtime_settings.update(
         lm_studio_url=body.lm_studio_url,
+        embedding_provider=body.embedding_provider,
+        embedding_base_url=body.embedding_base_url,
+        embedding_api_key=body.embedding_api_key,
         default_embedding_model=body.default_embedding_model,
         embedding_workers=body.embedding_workers,
         bsl_embed_mode=body.bsl_embed_mode,
@@ -142,12 +162,11 @@ def reset_bsl_embed_limits() -> SettingsOut:
     return SettingsOut(**runtime_settings.get_all())
 
 
-@router.get("/models")
-def list_models() -> ModelsResponse:
-    result = lm_studio.list_embedding_models()
+def _models_response(result: dict) -> ModelsResponse:
     return ModelsResponse(
         ok=result["ok"],
         lm_studio_url=result["lm_studio_url"],
+        provider=result.get("provider") or runtime_settings.get_embedding_provider(),
         source=result.get("source") or "",
         error=result.get("error"),
         default_embedding_model=runtime_settings.get_default_embedding_model(),
@@ -155,9 +174,75 @@ def list_models() -> ModelsResponse:
     )
 
 
+def _probe_overrides(body: EmbeddingProbeIn) -> dict:
+    """Turn unsaved form values into explicit overrides; nothing is persisted."""
+    stored = runtime_settings.get_embedding_provider()
+    provider = (body.embedding_provider or "").strip().lower() or None
+    if provider is not None and provider not in embedding_providers.ALLOWED_PROVIDERS:
+        raise HTTPException(
+            400,
+            "embedding_provider must be one of: "
+            + ", ".join(sorted(embedding_providers.ALLOWED_PROVIDERS)),
+        )
+    base_url = (body.embedding_base_url or "").strip().rstrip("/") or None
+    if base_url is not None and not embedding_providers.is_http_url(base_url):
+        raise HTTPException(400, "embedding_base_url must start with http:// or https://")
+    api_key: str | None = (body.embedding_api_key or "").strip() or None
+    if provider is not None and provider != stored:
+        # Previewing another provider: take its preset URL and never borrow the
+        # stored key — a foreign key would only produce a confusing 401.
+        base_url = base_url or (embedding_providers.provider_preset(provider)["base_url"] or None)
+        if api_key is None:
+            api_key = ""
+    return {
+        "provider": provider,
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": (body.default_embedding_model or "").strip() or None,
+    }
+
+
+@router.get("/models")
+def list_models(live: bool = True) -> ModelsResponse:
+    """``live=false`` returns the curated list for hosted providers (instant)."""
+    return _models_response(lm_studio.list_embedding_models(live=live))
+
+
+@router.post("/models/preview")
+def preview_models(body: EmbeddingProbeIn) -> ModelsResponse:
+    """List models for the values currently typed in the UI (nothing saved)."""
+    args = _probe_overrides(body)
+    return _models_response(
+        lm_studio.list_embedding_models(
+            base_url=args["base_url"],
+            live=body.live,
+            provider=args["provider"],
+            api_key=args["api_key"],
+        )
+    )
+
+
+@router.get("/balance")
+def provider_balance(live: bool = False) -> BalanceOut:
+    """RouterAI account balance; ``live=true`` bypasses the 60-second cache."""
+    return BalanceOut(**balance.get_balance(live=live))
+
+
 @router.get("/ping")
 def ping_lm() -> dict:
     return lm_studio.ping()
+
+
+@router.post("/ping")
+def ping_preview(body: EmbeddingProbeIn) -> dict:
+    """Probe the typed-in provider: one tiny embedding validates URL + key + model."""
+    args = _probe_overrides(body)
+    return lm_studio.ping(
+        base_url=args["base_url"],
+        provider=args["provider"],
+        api_key=args["api_key"],
+        model=args["model"],
+    )
 
 
 @router.get("/build")

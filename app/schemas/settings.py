@@ -32,8 +32,24 @@ class BslEmbedWindowPreset(BaseModel):
     limits: BslEmbedLimitsDefaults
 
 
+class EmbeddingProviderOut(BaseModel):
+    id: str
+    label: str
+    base_url: str = ""
+    requires_key: bool = False
+    default_model: str = ""
+    docs_url: str = ""
+    suggested_models: list[str] = []
+
+
 class SettingsOut(BaseModel):
     lm_studio_url: str
+    embedding_provider: str = "lmstudio"
+    embedding_base_url: str = ""
+    embedding_api_key_set: bool = False
+    embedding_api_key_masked: str = ""
+    embedding_ready: bool = True
+    embedding_providers: list[EmbeddingProviderOut] | None = None
     default_embedding_model: str
     embedding_workers: int = 2
     bsl_embed_mode: str = "meta"
@@ -62,6 +78,18 @@ class SettingsOut(BaseModel):
 
 class SettingsPatch(BaseModel):
     lm_studio_url: str | None = Field(default=None, description="LM Studio base URL, e.g. http://127.0.0.1:1234")
+    embedding_provider: str | None = Field(
+        default=None,
+        description="Embedding provider: lmstudio (default) | routerai",
+    )
+    embedding_base_url: str | None = Field(
+        default=None,
+        description="Base URL for routerai; ignored for lmstudio",
+    )
+    embedding_api_key: str | None = Field(
+        default=None,
+        description="Bearer key for a hosted provider; empty string deletes the stored key",
+    )
     default_embedding_model: str | None = Field(default=None, description="Default embedding model id")
     embedding_workers: int | None = Field(default=None, description="Parallel embedding workers: 1, 2, 4, 8, 12 or 16")
     bsl_embed_mode: str | None = Field(
@@ -137,9 +165,36 @@ class EmbeddingModelOut(BaseModel):
     max_context_length: int | None = None
 
 
+class BalanceOut(BaseModel):
+    ok: bool
+    provider: str
+    provider_label: str = ""
+    balance: float | None = None
+    currency: str = "RUB"
+    low: bool = False
+    critical: bool = False
+    low_threshold: float = 100.0
+    critical_threshold: float = 20.0
+    topup_url: str = ""
+    error: str | None = None
+    cached: bool = False
+    checked_at: int = 0
+
+
+class EmbeddingProbeIn(BaseModel):
+    """Unsaved values from the UI, used to preview a provider before saving."""
+
+    embedding_provider: str | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    default_embedding_model: str | None = None
+    live: bool = True
+
+
 class ModelsResponse(BaseModel):
     ok: bool
     lm_studio_url: str
+    provider: str = "lmstudio"
     source: str = ""
     error: str | None = None
     default_embedding_model: str

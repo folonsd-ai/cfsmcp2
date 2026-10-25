@@ -140,6 +140,26 @@ Native — запасной вариант (нет Docker или нужна от
 - **Docker** (рекомендуется), **Windows Portable (exe)** или Python 3.13+ — Windows, macOS, Linux
 - [LM Studio](https://lmstudio.ai/) Local Server с embedding-моделью (по умолчанию `text-embedding-multilingual-e5-small`)
 
+## Провайдер эмбеддингов
+
+По умолчанию — LM Studio, первичная установка ничего не меняет. В UI кнопка **«Эмбеддинги»** в шапке → вкладка «Подключение» → «Провайдер эмбеддингов», либо через API:
+
+| Провайдер | `embedding_provider` | Base URL | Ключ | Модель по умолчанию |
+|---|---|---|---|---|
+| LM Studio (default) | `lmstudio` | из `LM_STUDIO_URL` (`http://host.docker.internal:1234`) | не нужен | `text-embedding-multilingual-e5-small` |
+| RouterAI (РФ, ₽) | `routerai` | `https://routerai.ru/api/v1` | нужен | `openai/text-embedding-3-small` |
+
+```bash
+curl -X PATCH http://127.0.0.1:8559/api/settings -H 'Content-Type: application/json' \
+  -d '{"embedding_provider":"routerai","embedding_api_key":"<ключ>","default_embedding_model":"openai/text-embedding-3-small"}'
+```
+
+Base URL можно указывать с `/v1` или без — `/v1/embeddings` дописывается сам. Env-переменные: `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_API_KEY` (ключ из UI хранится в локальной SQLite `app_settings` и в логи не пишется; для `lmstudio` заголовок `Authorization` не отправляется вообще).
+
+При выборе RouterAI в шапке появляется баланс счёта (`GET /api/settings/balance`, кэш 60 с): жёлтый при остатке ниже 100 ₽, красный с пульсацией — ниже 20 ₽ (`BALANCE_LOW_RUB` / `BALANCE_CRITICAL_RUB`), клик открывает страницу пополнения RouterAI.
+
+**Смена провайдера или модели меняет размерность векторов.** Индексы zvec, построенные прежней моделью, с новыми векторами несравнимы — после переключения нужен Reindex контекста. Облачный провайдер получает текст выгрузки: для конфигураций с ограничениями по данным выбирайте LM Studio или российского провайдера.
+
 ## Точки подключения (`MOUNT_POINTS`)
 
 Именованные корни, видимые процессу в контейнере. Формат: `id=/mnt/path` или `id=/mnt/path|Label`, разделители `,` / `;`.

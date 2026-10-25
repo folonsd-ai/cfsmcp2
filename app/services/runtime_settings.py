@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from app.core.config import settings
 from app.core.database import connect
+from app.services import embedding_providers as ep
 
 KEY_LM_URL = "lm_studio_url"
 KEY_DEFAULT_MODEL = "default_embedding_model"
+KEY_EMBED_PROVIDER = "embedding_provider"
+KEY_EMBED_BASE_URL = "embedding_base_url"
+KEY_EMBED_API_KEY = "embedding_api_key"
 KEY_EMBEDDING_WORKERS = "embedding_workers"
 KEY_EMBEDDING_BATCH_SIZE = "embedding_batch_size"
 KEY_EMBED_WORKERS_OVERRIDE = "embed_workers_override"
@@ -94,6 +98,63 @@ def _as_int(raw: str, default: int) -> int:
 
 def get_lm_studio_url() -> str:
     return get_setting(KEY_LM_URL, str(settings.lm_studio_url)).rstrip("/")
+
+
+def get_embedding_provider() -> str:
+    """Active embedding provider; absent setting means LM Studio (pre-0.2.39 behaviour)."""
+    return ep.normalize_provider(get_setting(KEY_EMBED_PROVIDER, settings.embeddings_provider))
+
+
+def get_embedding_base_url() -> str:
+    """Base URL of the active provider (LM Studio keeps using lm_studio_url)."""
+    provider = get_embedding_provider()
+    if provider == ep.LMSTUDIO:
+        return get_lm_studio_url()
+    explicit = ep.normalize_base_url(get_setting(KEY_EMBED_BASE_URL, ""))
+    if explicit:
+        return explicit
+    return ep.normalize_base_url(ep.provider_preset(provider)["base_url"])
+
+
+def get_embedding_api_key() -> str:
+    """Bearer key for hosted providers; always empty for LM Studio."""
+    if get_embedding_provider() == ep.LMSTUDIO:
+        return ""
+    return (get_setting(KEY_EMBED_API_KEY, settings.embeddings_api_key) or "").strip()
+
+
+def get_embedding_base_url_for(provider: str | None = None) -> str:
+    """Base URL as it *would* be for ``provider`` — used by the preview endpoints."""
+    target = ep.normalize_provider(provider) if provider else get_embedding_provider()
+    if target == ep.LMSTUDIO:
+        return get_lm_studio_url()
+    if target == get_embedding_provider():
+        return get_embedding_base_url()
+    preset = ep.provider_preset(target)
+    return ep.normalize_base_url(preset["base_url"])
+
+
+def get_embedding_api_key_for(provider: str | None = None) -> str:
+    target = ep.normalize_provider(provider) if provider else get_embedding_provider()
+    if target == ep.LMSTUDIO:
+        return ""
+    return (get_setting(KEY_EMBED_API_KEY, settings.embeddings_api_key) or "").strip()
+
+
+def get_embedding_api_key_set() -> bool:
+    return bool(get_embedding_api_key())
+
+
+def get_embeddings_ready() -> bool:
+    """False only when a hosted provider is selected without a key."""
+    preset = ep.provider_preset(get_embedding_provider())
+    if preset["requires_key"] and not get_embedding_api_key():
+        return False
+    return bool(get_embedding_base_url())
+
+
+def embedding_endpoint(path: str = "embeddings") -> str:
+    return ep.endpoint_for(get_embedding_base_url(), path)
 
 
 def get_default_embedding_model() -> str:
@@ -291,6 +352,12 @@ def get_all() -> dict:
 
     return {
         "lm_studio_url": get_lm_studio_url(),
+        "embedding_provider": get_embedding_provider(),
+        "embedding_base_url": get_embedding_base_url(),
+        "embedding_api_key_set": get_embedding_api_key_set(),
+        "embedding_api_key_masked": ep.mask_key(get_embedding_api_key()),
+        "embedding_ready": get_embeddings_ready(),
+        "embedding_providers": ep.providers_public(),
         "default_embedding_model": get_default_embedding_model(),
         "embedding_workers": get_embedding_workers(),
         "bsl_embed_mode": get_bsl_embed_mode(),
@@ -321,6 +388,9 @@ def get_all() -> dict:
 def update(
     *,
     lm_studio_url: str | None = None,
+    embedding_provider: str | None = None,
+    embedding_base_url: str | None = None,
+    embedding_api_key: str | None = None,
     default_embedding_model: str | None = None,
     embedding_workers: int | None = None,
     bsl_embed_mode: str | None = None,
@@ -350,6 +420,41 @@ def update(
             from app.services.embeddings import clear_query_embedding_cache
 
             clear_query_embedding_cache()
+    if embedding_provider is not None:
+        provider = ep.normalize_provider(embedding_provider)
+        if provider != get_embedding_provider():
+            preset = ep.provider_preset(provider)
+            set_setting(KEY_EMBED_PROVIDER, provider)
+            # Switching provider drops overrides that belonged to the previous one:
+            # an old base URL would silently send RouterAI traffic to OpenRouter, and
+            # an old model id would 404 on the new endpoint.
+            if embedding_base_url is None:
+                delete_setting(KEY_EMBED_BASE_URL)
+            if default_embedding_model is None and preset["default_model"]:
+                set_setting(KEY_DEFAULT_MODEL, preset["default_model"])
+            from app.services.embeddings import clear_query_embedding_cache
+
+            clear_query_embedding_cache()
+    if embedding_base_url is not None:
+        url = embedding_base_url.strip()
+        if url:
+            set_setting(KEY_EMBED_BASE_URL, ep.normalize_base_url(url))
+            from app.services.embeddings import clear_query_embedding_cache
+
+            clear_query_embedding_cache()
+        else:
+            # Blank means "drop the override and fall back to the provider preset".
+            delete_setting(KEY_EMBED_BASE_URL)
+    if embedding_api_key is not None:
+        key = embedding_api_key.strip()
+        if key:
+            set_setting(KEY_EMBED_API_KEY, key)
+        else:
+            # Explicit empty string deletes the stored key (UI "clear" action).
+            delete_setting(KEY_EMBED_API_KEY)
+        from app.services.embeddings import clear_query_embedding_cache
+
+        clear_query_embedding_cache()
     if default_embedding_model is not None:
         model = default_embedding_model.strip()
         # Ignore blank — do not wipe a saved model when LM is offline / select empty.
