@@ -2023,11 +2023,21 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .field-block input, .modal .field input[type=text],
 .modal .field input[type=url], .modal .field input[type=number],
 .modal .field select, .modal .field textarea {
-  background: var(--color-background) !important;
+  /* background-color — не background: иначе !important стирает chevron у select */
+  background-color: var(--color-background) !important;
   border: 1px solid var(--color-border-soft) !important;
   color: var(--color-foreground) !important;
   border-radius: 9px !important; padding: 12px 13px !important;
   font: 15.5px var(--font-sans) !important;
+}
+.modal .field select, .field-block select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 14px !important;
+  padding-right: 34px !important;
 }
 .field-hint, .hint { font-size: 14.5px; color: var(--color-muted-foreground); margin: 2px 0 0; }
 
@@ -2099,8 +2109,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   justify-self: stretch;
   text-transform: none; font-weight: 400; letter-spacing: normal;
   padding: 12px 13px !important; border-radius: 9px !important;
-  background: var(--color-background) !important; border: 1px solid var(--color-border-soft) !important;
+  /* background-color — не background: иначе !important стирает chevron у select */
+  background-color: var(--color-background) !important; border: 1px solid var(--color-border-soft) !important;
   color: var(--color-foreground) !important; font: 15.5px var(--font-sans) !important;
+}
+#lmModal [data-lm-panel="connection"] .row > label select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 14px !important;
+  padding-right: 34px !important;
 }
 #lmModal [data-lm-panel="connection"] #embeddingWorkers {
   width: auto !important;
